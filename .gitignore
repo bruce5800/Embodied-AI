@@ -1,2 +1,5 @@
 .DS_Store
-/数据增强/audio/base.pt
+base.pt
+__pycache__/
+*.pyc
+node_modules/
