@@ -50,8 +50,9 @@
       <freejoint name="red_cylinder_joint"/>
       <inertial pos="0 0 0" mass="0.05" diaginertia="0.00001 0.00001 0.00001"/>
       <geom name="red_cylinder_geom" type="cylinder" size="0.02 0.03"
-            material="mat_red" friction="1.0 0.05 0.01"
-            condim="4" contype="1" conaffinity="1" priority="1"/>
+            material="mat_red" friction="2.0 0.1 0.01"
+            condim="4" contype="1" conaffinity="1" priority="1"
+            solref="0.01 0.5" solimp="0.9 0.95 0.001 0.5 2"/>
     </body>
 
     <!-- 蓝色方块 -->
@@ -59,8 +60,9 @@
       <freejoint name="blue_cube_joint"/>
       <inertial pos="0 0 0" mass="0.05" diaginertia="0.00001 0.00001 0.00001"/>
       <geom name="blue_cube_geom" type="box" size="0.025 0.025 0.025"
-            material="mat_blue" friction="1.0 0.05 0.01"
-            condim="4" contype="1" conaffinity="1" priority="1"/>
+            material="mat_blue" friction="2.0 0.1 0.01"
+            condim="4" contype="1" conaffinity="1" priority="1"
+            solref="0.01 0.5" solimp="0.9 0.95 0.001 0.5 2"/>
     </body>
 
     <!-- 绿色球体 -->
@@ -68,8 +70,9 @@
       <freejoint name="green_sphere_joint"/>
       <inertial pos="0 0 0" mass="0.04" diaginertia="0.000008 0.000008 0.000008"/>
       <geom name="green_sphere_geom" type="sphere" size="0.025"
-            material="mat_green" friction="1.5 0.05 0.01"
-            condim="4" contype="1" conaffinity="1" priority="1"/>
+            material="mat_green" friction="2.5 0.1 0.01"
+            condim="4" contype="1" conaffinity="1" priority="1"
+            solref="0.01 0.5" solimp="0.9 0.95 0.001 0.5 2"/>
     </body>
 
     <!-- 黄色小圆柱 -->
@@ -77,8 +80,9 @@
       <freejoint name="yellow_cylinder_joint"/>
       <inertial pos="0 0 0" mass="0.03" diaginertia="0.000005 0.000005 0.000005"/>
       <geom name="yellow_cylinder_geom" type="cylinder" size="0.015 0.02"
-            material="mat_yellow" friction="1.0 0.05 0.01"
-            condim="4" contype="1" conaffinity="1" priority="1"/>
+            material="mat_yellow" friction="2.0 0.1 0.01"
+            condim="4" contype="1" conaffinity="1" priority="1"
+            solref="0.01 0.5" solimp="0.9 0.95 0.001 0.5 2"/>
     </body>
 
     <!-- ==================== 分拣目标区域 ==================== -->

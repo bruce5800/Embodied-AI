@@ -57,8 +57,10 @@
                             <body name="link5" pos="0 0 0">
                                 <joint name="joint5" type="hinge" axis="0 0 1"
                                        range="-180 180" pos="-0.02548 0.0018 0.792"/>
-                                <!-- FF.stl = 夹爪固定半侧 -->
-                                <geom name="link5_geom" type="mesh" mesh="f_mesh" mass="0.08"/>
+                                <!-- FF.stl = 夹爪固定半侧（高摩擦 + 软接触） -->
+                                <geom name="link5_geom" type="mesh" mesh="f_mesh" mass="0.08"
+                                      friction="3.0 0.1 0.01" condim="4"
+                                      solref="0.01 0.5" solimp="0.9 0.95 0.001 0.5 2"/>
 
                                 <!-- joint6: 夹爪开合（GG.stl = 活动半侧） -->
                                 <body name="gripper" pos="0 0 0">
@@ -66,7 +68,8 @@
                                            range="-50 90" pos="-0.02548 -0.02608 0.836"
                                            damping="100" armature="1"/>
                                     <geom name="gripper_geom" type="mesh" mesh="g_mesh" mass="0.05"
-                                          friction="1.5 0.05 0.01" condim="4"/>
+                                          friction="3.0 0.1 0.01" condim="4"
+                                          solref="0.01 0.5" solimp="0.9 0.95 0.001 0.5 2"/>
 
                                     <!-- 末端参考点（用于 IK） -->
                                     <site name="end_effector" pos="-0.02548 -0.05 0.88"

@@ -31,7 +31,7 @@ SCENE_XML = os.path.join(_SCRIPT_DIR, "asserts", "lift_cube2.xml")
 ARM_ACTUATORS = 5        # joint1~5 的执行器索引 0~4
 GRIPPER_IDX = 5          # joint6 的执行器索引 = 5
 GRIPPER_OPEN = np.radians(90)    # 张开角度 90°
-GRIPPER_CLOSE = np.radians(-5)  # 闭合角度 -5°
+GRIPPER_CLOSE = np.radians(0)  # 闭合角度 0°
 
 # ─── GLFW 方向键码 ───
 GLFW_KEY_RIGHT = 262
