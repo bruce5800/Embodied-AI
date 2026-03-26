@@ -5,6 +5,7 @@ MuJoCo 交互式仿真 Demo - 智能分拣场景
   1. 交互式 3D 查看器（鼠标旋转/缩放/拖拽物体）
   2. 键盘控制 6 个关节 + 夹爪开合
   3. 离屏渲染 → OpenCV 显示（模拟相机视角，后续接 YOLO）
+  4. 预设姿态一键到位，方便快速测试抓取
 
 安装依赖：
   pip install mujoco opencv-python numpy
@@ -13,16 +14,12 @@ MuJoCo 交互式仿真 Demo - 智能分拣场景
   python mujoco_demo.py              # 默认: 交互式查看器
   python mujoco_demo.py --mode cv    # 离屏渲染 + OpenCV 显示
 
-键位说明（viewer 模式）：
-  关节控制用两排键，上排+、下排-，避开 MuJoCo 内置快捷键(QWER等)
-  ┌───┬───┬───┬───┬───┬───┐
-  │ 1 │ 2 │ 3 │ 4 │ 5 │ 6 │  ← 正方向
-  ├───┼───┼───┼───┼───┼───┤
-  │ Z │ X │ C │ V │ B │ N │  ← 负方向
-  └───┴───┴───┴───┴───┴───┘
-  底座  肩   肘  腕俯 腕旋 末端
+键位说明（viewer 模式，完全避开 MuJoCo 内置快捷键）：
+  数字键 1~6 选择关节，← → 方向键控制方向
+  ↑ ↓ 方向键调整步长
 
   Space → 夹爪开/合    0 → 复位
+  7/8/9 → 预设姿态（快速到位测试抓取）
 """
 
 import argparse
@@ -30,7 +27,7 @@ import os
 import time
 import numpy as np
 
-# ─── XML 路径（基于脚本所在目录，确保从任意位置运行都能找到）───
+# ─── XML 路径 ───
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SCENE_XML = os.path.join(_SCRIPT_DIR, "asserts", "lift_cube2.xml")
 
@@ -38,30 +35,36 @@ SCENE_XML = os.path.join(_SCRIPT_DIR, "asserts", "lift_cube2.xml")
 JOINT_ACTUATORS = 6
 GRIPPER_LEFT_IDX = 6
 GRIPPER_RIGHT_IDX = 7
-GRIPPER_OPEN = -0.02
-GRIPPER_CLOSE = 0.005
+GRIPPER_OPEN = 0.0       # 张开：两指间距 7cm
+GRIPPER_CLOSE = 0.03     # 闭合：两指间距 1cm
 
-# ─── 键位映射（避开 MuJoCo viewer 内置快捷键 QWER/Tab/Space 等）───
-# 上排数字键: 正方向 (+)
-# 下排 ZXCVBN: 负方向 (-)
-KEY_MAP_VIEWER = {
-    ord('1'): (0, +1), ord('Z'): (0, -1),   # joint1 - 底座旋转
-    ord('2'): (1, +1), ord('X'): (1, -1),   # joint2 - 肩部
-    ord('3'): (2, +1), ord('C'): (2, -1),   # joint3 - 肘部
-    ord('4'): (3, +1), ord('V'): (3, -1),   # joint4 - 腕部俯仰
-    ord('5'): (4, +1), ord('B'): (4, -1),   # joint5 - 腕部旋转
-    ord('6'): (5, +1), ord('N'): (5, -1),   # joint6 - 末端旋转
+# ─── GLFW 特殊键码（MuJoCo viewer 用 GLFW） ───
+GLFW_KEY_RIGHT = 262
+GLFW_KEY_LEFT  = 263
+GLFW_KEY_DOWN  = 264
+GLFW_KEY_UP    = 265
+
+# ─── 预设姿态（弧度），方便一键到位测试 ───
+PRESETS = {
+    ord('7'): {
+        'name': '就绪姿态（悬停在桌面上方）',
+        'joints': [0.0, -0.8, 0.5, 0.3, 0.0, 0.0],
+        'gripper': 'open',
+    },
+    ord('8'): {
+        'name': '抓取预备（对准黄色小圆柱上方）',
+        'joints': [-0.54, -0.39, -1.52, -1.56, 0.0, 0.0],
+        'gripper': 'open',
+    },
+    ord('9'): {
+        'name': '低位抓取（再下探一点）',
+        'joints': [-0.54, -0.30, -1.52, -1.56, 0.0, 0.0],
+        'gripper': 'open',
+    },
 }
 
-# OpenCV 模式用小写
-KEY_MAP_CV = {
-    ord('1'): (0, +1), ord('z'): (0, -1),
-    ord('2'): (1, +1), ord('x'): (1, -1),
-    ord('3'): (2, +1), ord('c'): (2, -1),
-    ord('4'): (3, +1), ord('v'): (3, -1),
-    ord('5'): (4, +1), ord('b'): (4, -1),
-    ord('6'): (5, +1), ord('n'): (5, -1),
-}
+# ─── 关节名称 ───
+JOINT_NAMES = ['底座', '肩部', '肘部', '腕俯仰', '腕旋转', '末端']
 
 
 def _clamp_joint(model, joint_targets, actuator_idx):
@@ -81,28 +84,33 @@ def _clamp_joint(model, joint_targets, actuator_idx):
                 continue
 
 
-def _reset(model, data, joint_targets, gripper_state):
-    """复位机械臂和夹爪"""
-    joint_targets[:JOINT_ACTUATORS] = 0
-    joint_targets[GRIPPER_LEFT_IDX] = GRIPPER_OPEN
-    joint_targets[GRIPPER_RIGHT_IDX] = GRIPPER_OPEN
-    gripper_state[0] = True
-    mujoco.mj_resetData(model, data)
-    print("  复位")
+def _apply_preset(preset, joint_targets, gripper_state):
+    """应用预设姿态"""
+    for i, val in enumerate(preset['joints']):
+        joint_targets[i] = val
+    if preset['gripper'] == 'open':
+        joint_targets[GRIPPER_LEFT_IDX] = GRIPPER_OPEN
+        joint_targets[GRIPPER_RIGHT_IDX] = GRIPPER_OPEN
+        gripper_state[0] = True
+    else:
+        joint_targets[GRIPPER_LEFT_IDX] = GRIPPER_CLOSE
+        joint_targets[GRIPPER_RIGHT_IDX] = GRIPPER_CLOSE
+        gripper_state[0] = False
+    print(f"  预设: {preset['name']}")
 
 
-def _toggle_gripper(joint_targets, gripper_state):
-    """切换夹爪开合"""
-    gripper_state[0] = not gripper_state[0]
-    pos = GRIPPER_OPEN if gripper_state[0] else GRIPPER_CLOSE
-    joint_targets[GRIPPER_LEFT_IDX] = pos
-    joint_targets[GRIPPER_RIGHT_IDX] = pos
-    state = "张开" if gripper_state[0] else "闭合"
-    print(f"  夹爪: {state}")
+def _print_status(joint_targets, selected_joint, joint_step, gripper_state):
+    """打印当前状态"""
+    angles = [np.degrees(joint_targets[i]) for i in range(JOINT_ACTUATORS)]
+    grip = "张开" if gripper_state[0] else "闭合"
+    step_deg = np.degrees(joint_step)
+    parts = [f"J{i+1}:{a:+.0f}°" for i, a in enumerate(angles)]
+    print(f"  [当前关节 {selected_joint+1}-{JOINT_NAMES[selected_joint]}]  "
+          f"步长:{step_deg:.0f}°  夹爪:{grip}  {' '.join(parts)}")
 
 
 def run_interactive():
-    """方式一: 交互式查看器"""
+    """方式一: 交互式查看器 — 数字键选关节，方向键控制"""
     import mujoco
     import mujoco.viewer
 
@@ -110,10 +118,10 @@ def run_interactive():
     data = mujoco.MjData(model)
 
     # 打印模型信息
-    print("=" * 55)
-    print(f"模型: {SCENE_XML}")
+    print("=" * 60)
+    print(f"模型: {os.path.basename(SCENE_XML)}")
     print(f"关节数: {model.njnt}  执行器数: {model.nu}  物体数: {model.nbody}")
-    print("-" * 55)
+    print("-" * 60)
     print("关节信息:")
     for i in range(model.njnt):
         jnt = model.joint(i)
@@ -127,40 +135,93 @@ def run_interactive():
             print(f"  [{i}] {name:25s} ({jtype:5s})  range=[{lo:+.1f}, {hi:+.1f}]{unit}")
         else:
             print(f"  [{i}] {name:25s} ({jtype})")
-    print("=" * 55)
+    print("=" * 60)
 
     # ─── 控制状态 ───
     joint_targets = np.zeros(model.nu)
-    joint_step = np.radians(2)
-    gripper_state = [True]  # 用 list 包装，便于闭包修改
+    selected_joint = 0        # 当前选中的关节 (0~5)
+    joint_step = np.radians(5)  # 默认步长 5°
+    gripper_state = [True]
 
     # 初始夹爪张开
     joint_targets[GRIPPER_LEFT_IDX] = GRIPPER_OPEN
     joint_targets[GRIPPER_RIGHT_IDX] = GRIPPER_OPEN
 
     def key_callback(keycode):
-        if keycode in KEY_MAP_VIEWER:
-            idx, direction = KEY_MAP_VIEWER[keycode]
-            joint_targets[idx] += direction * joint_step
-            _clamp_joint(model, joint_targets, idx)
+        nonlocal selected_joint, joint_step
 
-        elif keycode == ord(' '):
-            _toggle_gripper(joint_targets, gripper_state)
+        # 数字键 1~6: 选择关节
+        if ord('1') <= keycode <= ord('6'):
+            selected_joint = keycode - ord('1')
+            print(f"  选中关节 {selected_joint+1}: {JOINT_NAMES[selected_joint]}")
+            return
 
-        elif keycode == ord('0'):
-            _reset(model, data, joint_targets, gripper_state)
+        # ← → 方向键: 控制当前关节
+        if keycode == GLFW_KEY_RIGHT:
+            joint_targets[selected_joint] += joint_step
+            _clamp_joint(model, joint_targets, selected_joint)
+            _print_status(joint_targets, selected_joint, joint_step, gripper_state)
+            return
+        if keycode == GLFW_KEY_LEFT:
+            joint_targets[selected_joint] -= joint_step
+            _clamp_joint(model, joint_targets, selected_joint)
+            _print_status(joint_targets, selected_joint, joint_step, gripper_state)
+            return
 
-    print("\n键盘控制:")
-    print("  ┌───┬───┬───┬───┬───┬───┐")
-    print("  │ 1 │ 2 │ 3 │ 4 │ 5 │ 6 │  ← 正方向 (+)")
-    print("  ├───┼───┼───┼───┼───┼───┤")
-    print("  │ Z │ X │ C │ V │ B │ N │  ← 负方向 (-)")
-    print("  └───┴───┴───┴───┴───┴───┘")
-    print("  底座  肩   肘  腕俯 腕旋 末端")
+        # ↑ ↓ 方向键: 调整步长
+        if keycode == GLFW_KEY_UP:
+            joint_step = min(joint_step * 2, np.radians(20))
+            print(f"  步长: {np.degrees(joint_step):.0f}°")
+            return
+        if keycode == GLFW_KEY_DOWN:
+            joint_step = max(joint_step / 2, np.radians(1))
+            print(f"  步长: {np.degrees(joint_step):.0f}°")
+            return
+
+        # Space: 夹爪开合
+        if keycode == ord(' '):
+            gripper_state[0] = not gripper_state[0]
+            pos = GRIPPER_OPEN if gripper_state[0] else GRIPPER_CLOSE
+            joint_targets[GRIPPER_LEFT_IDX] = pos
+            joint_targets[GRIPPER_RIGHT_IDX] = pos
+            state = "张开" if gripper_state[0] else "闭合"
+            print(f"  夹爪: {state}")
+            return
+
+        # 0: 复位
+        if keycode == ord('0'):
+            joint_targets[:JOINT_ACTUATORS] = 0
+            joint_targets[GRIPPER_LEFT_IDX] = GRIPPER_OPEN
+            joint_targets[GRIPPER_RIGHT_IDX] = GRIPPER_OPEN
+            gripper_state[0] = True
+            mujoco.mj_resetData(model, data)
+            print("  复位")
+            return
+
+        # 7/8/9: 预设姿态
+        if keycode in PRESETS:
+            _apply_preset(PRESETS[keycode], joint_targets, gripper_state)
+            return
+
     print()
-    print("  Space → 夹爪开/合    0 → 复位")
-    print("  鼠标: 左键旋转 | 右键平移 | 滚轮缩放")
-    print("  双击物体可施加力\n")
+    print("╔══════════════════════════════════════════╗")
+    print("║           键 盘 操 控 说 明              ║")
+    print("╠══════════════════════════════════════════╣")
+    print("║  1~6       选择关节                      ║")
+    print("║  ← →       控制当前关节 (-/+)            ║")
+    print("║  ↑ ↓       调整步长 (1°~20°)             ║")
+    print("║  Space     夹爪 开/合                    ║")
+    print("║  0         复位                          ║")
+    print("║  7         预设: 就绪悬停                ║")
+    print("║  8         预设: 对准红色圆柱            ║")
+    print("║  9         预设: 低位接近地面            ║")
+    print("╠══════════════════════════════════════════╣")
+    print("║  鼠标: 左键旋转 | 右键平移 | 滚轮缩放   ║")
+    print("║  双击物体可施加力                        ║")
+    print("╚══════════════════════════════════════════╝")
+    print()
+    print(f"  当前选中: 关节1-{JOINT_NAMES[0]}  步长: {np.degrees(joint_step):.0f}°")
+    print()
 
     with mujoco.viewer.launch_passive(
         model, data, key_callback=key_callback
@@ -185,72 +246,91 @@ def run_cv_mode():
 
     cameras = ["camera_front", "camera_top", "camera_side"]
     cam_idx = 0
-
-    print("OpenCV 渲染模式")
-    print(f"  当前相机: {cameras[cam_idx]}")
-    print("  ┌───┬───┬───┬───┬───┬───┐")
-    print("  │ 1 │ 2 │ 3 │ 4 │ 5 │ 6 │  ← 正方向")
-    print("  ├───┼───┼───┼───┼───┼───┤")
-    print("  │ Z │ X │ C │ V │ B │ N │  ← 负方向")
-    print("  └───┴───┴───┴───┴───┴───┘")
-    print("  9 → 切换相机  |  Space → 夹爪  |  0 → 复位  |  ESC → 退出")
-
-    joint_targets = np.zeros(model.nu)
-    joint_step = np.radians(2)
+    selected_joint = 0
+    joint_step = np.radians(5)
     gripper_state = [True]
 
+    joint_targets = np.zeros(model.nu)
     joint_targets[GRIPPER_LEFT_IDX] = GRIPPER_OPEN
     joint_targets[GRIPPER_RIGHT_IDX] = GRIPPER_OPEN
 
+    print("OpenCV 渲染模式")
+    print("  1~6: 选关节  ← →: 控制  ↑ ↓: 步长")
+    print("  Space: 夹爪  0: 复位  9: 切换相机  7/8: 预设  ESC: 退出")
+
     while True:
-        # 仿真步进（多步保证物理稳定）
         data.ctrl[:] = joint_targets
         for _ in range(10):
             mujoco.mj_step(model, data)
 
-        # 渲染
         renderer.update_scene(data, camera=cameras[cam_idx])
         img = renderer.render()
         img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
-        # HUD
+        # HUD: 相机 + 选中关节
         cv2.putText(img_bgr, f"Camera: {cameras[cam_idx]}",
-                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.putText(img_bgr, f"Joint {selected_joint+1}: {JOINT_NAMES[selected_joint]}  "
+                    f"Step: {np.degrees(joint_step):.0f} deg",
+                    (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
 
+        # HUD: 关节角度（高亮选中关节）
         for i in range(JOINT_ACTUATORS):
             angle_deg = np.degrees(joint_targets[i])
-            cv2.putText(img_bgr, f"J{i+1}: {angle_deg:+6.1f} deg",
-                        (10, 60 + i * 22), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
-                        (255, 255, 255), 1)
+            color = (0, 255, 255) if i == selected_joint else (200, 200, 200)
+            marker = ">" if i == selected_joint else " "
+            cv2.putText(img_bgr, f"{marker}J{i+1} {JOINT_NAMES[i]:4s}: {angle_deg:+6.1f} deg",
+                        (10, 80 + i * 22), cv2.FONT_HERSHEY_SIMPLEX, 0.42, color, 1)
 
+        # HUD: 夹爪状态
         grip_str = "OPEN" if gripper_state[0] else "CLOSED"
         grip_color = (0, 255, 0) if gripper_state[0] else (0, 0, 255)
-        cv2.putText(img_bgr, f"Gripper: {grip_str}",
-                    (10, 60 + JOINT_ACTUATORS * 22 + 10),
+        cv2.putText(img_bgr, f" Gripper: {grip_str}",
+                    (10, 80 + JOINT_ACTUATORS * 22 + 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, grip_color, 2)
 
         cv2.imshow("MuJoCo Sim", img_bgr)
 
-        key = cv2.waitKey(16) & 0xFF
+        key = cv2.waitKey(16) & 0xFFFF  # 用 0xFFFF 捕获特殊键
         if key == 27:
             break
-        elif key == ord("9"):
+
+        # 数字键选关节
+        if ord('1') <= key <= ord('6'):
+            selected_joint = key - ord('1')
+        # 方向键（OpenCV 特殊键码，macOS/Linux 不同，用通用判断）
+        elif key in (83, 3):    # → 右
+            joint_targets[selected_joint] += joint_step
+            _clamp_joint(model, joint_targets, selected_joint)
+        elif key in (81, 2):    # ← 左
+            joint_targets[selected_joint] -= joint_step
+            _clamp_joint(model, joint_targets, selected_joint)
+        elif key in (82, 0):    # ↑ 上
+            joint_step = min(joint_step * 2, np.radians(20))
+        elif key in (84, 1):    # ↓ 下
+            joint_step = max(joint_step / 2, np.radians(1))
+        elif key == ord(' '):
+            gripper_state[0] = not gripper_state[0]
+            pos = GRIPPER_OPEN if gripper_state[0] else GRIPPER_CLOSE
+            joint_targets[GRIPPER_LEFT_IDX] = pos
+            joint_targets[GRIPPER_RIGHT_IDX] = pos
+        elif key == ord('0'):
+            joint_targets[:JOINT_ACTUATORS] = 0
+            joint_targets[GRIPPER_LEFT_IDX] = GRIPPER_OPEN
+            joint_targets[GRIPPER_RIGHT_IDX] = GRIPPER_OPEN
+            gripper_state[0] = True
+            mujoco.mj_resetData(model, data)
+        elif key == ord('9'):
             cam_idx = (cam_idx + 1) % len(cameras)
-            print(f"  切换到相机: {cameras[cam_idx]}")
-        elif key == ord(" "):
-            _toggle_gripper(joint_targets, gripper_state)
-        elif key == ord("0"):
-            _reset(model, data, joint_targets, gripper_state)
-        elif key in KEY_MAP_CV:
-            idx, direction = KEY_MAP_CV[key]
-            joint_targets[idx] += direction * joint_step
+        elif key in (ord('7'), ord('8')):
+            _apply_preset(PRESETS[key], joint_targets, gripper_state)
 
     cv2.destroyAllWindows()
     renderer.close()
 
 
 if __name__ == "__main__":
-    import mujoco  # 顶层导入，供 _reset 使用
+    import mujoco
 
     parser = argparse.ArgumentParser(description="MuJoCo 机械臂仿真 Demo - 智能分拣场景")
     parser.add_argument(

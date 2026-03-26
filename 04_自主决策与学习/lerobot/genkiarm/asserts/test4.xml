@@ -66,33 +66,48 @@
                                 <!-- link6: 末端执行器基座 -->
                                 <body name="link6" pos="0 0 0">
                                     <joint name="joint6" type="hinge" axis="1 0 0" range="-50 90" pos="-0.02548 -0.02608 0.836"/>
-                                    <geom name="link6_geom" type="mesh" mesh="g_mesh" mass="0.05"/>
+                                    <!-- 隐藏原始 STL 夹爪模型（无法活动），仅保留质量 -->
+                                    <geom name="link6_geom" type="mesh" mesh="g_mesh" mass="0.05"
+                                          rgba="0 0 0 0" contype="0" conaffinity="0"/>
 
-                                    <!-- ========== 平行夹爪 ========== -->
+                                    <!-- ========== 功能夹爪（替代原 STL） ========== -->
+                                    <!--
+                                        两根手指沿 Y 轴对称分布在原夹爪尖端位置，
+                                        向中心滑动来夹合。
+                                        左指 Y=-0.015，右指 Y=-0.085，中心 Y=-0.05
+                                        slide range=[0, 0.03]:
+                                          value=0     → 全开，间距 7cm
+                                          value=0.03  → 闭合，间距 1cm
+                                    -->
+
                                     <!-- 左手指 -->
-                                    <body name="finger_left" pos="-0.02548 -0.05 0.90">
-                                        <joint name="finger_left_joint" type="slide" axis="0 1 0"
-                                               range="-0.02 0.005" damping="50" armature="0.1"/>
+                                    <body name="finger_left" pos="-0.02548 -0.015 0.88">
+                                        <joint name="finger_left_joint" type="slide" axis="0 -1 0"
+                                               range="0 0.03" damping="20" armature="0.5"/>
                                         <geom class="gripper_finger" name="finger_left_geom"
-                                              type="box" size="0.008 0.008 0.03" pos="0 0 0"/>
-                                        <!-- 指尖（增加接触面积） -->
+                                              type="box" size="0.012 0.006 0.04" pos="0 0 0"
+                                              rgba="0.45 0.85 0.45 1"/>
+                                        <!-- 指尖内侧 -->
                                         <geom class="gripper_finger" name="finger_left_tip"
-                                              type="box" size="0.012 0.004 0.015" pos="0 -0.01 -0.02"/>
+                                              type="box" size="0.014 0.004 0.02" pos="0 -0.01 -0.025"
+                                              rgba="0.35 0.75 0.35 1"/>
                                     </body>
 
                                     <!-- 右手指 -->
-                                    <body name="finger_right" pos="-0.02548 -0.05 0.90">
-                                        <joint name="finger_right_joint" type="slide" axis="0 -1 0"
-                                               range="-0.02 0.005" damping="50" armature="0.1"/>
+                                    <body name="finger_right" pos="-0.02548 -0.085 0.88">
+                                        <joint name="finger_right_joint" type="slide" axis="0 1 0"
+                                               range="0 0.03" damping="20" armature="0.5"/>
                                         <geom class="gripper_finger" name="finger_right_geom"
-                                              type="box" size="0.008 0.008 0.03" pos="0 0 0"/>
-                                        <!-- 指尖 -->
+                                              type="box" size="0.012 0.006 0.04" pos="0 0 0"
+                                              rgba="0.45 0.85 0.45 1"/>
+                                        <!-- 指尖内侧 -->
                                         <geom class="gripper_finger" name="finger_right_tip"
-                                              type="box" size="0.012 0.004 0.015" pos="0 0.01 -0.02"/>
+                                              type="box" size="0.014 0.004 0.02" pos="0 0.01 -0.025"
+                                              rgba="0.35 0.75 0.35 1"/>
                                     </body>
 
-                                    <!-- 末端执行器参考点（用于 IK 目标） -->
-                                    <site name="end_effector" pos="-0.02548 -0.05 0.87" size="0.005" rgba="1 0 0 0.5"/>
+                                    <!-- 末端参考点（两指中心） -->
+                                    <site name="end_effector" pos="-0.02548 -0.05 0.86" size="0.005" rgba="1 0 0 0.5"/>
 
                                 </body>
                             </body>
