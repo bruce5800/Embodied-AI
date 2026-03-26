@@ -1,47 +1,108 @@
-<mujoco model="low_cost_robot scene">
-  <!-- The timestep has a big influence on the contacts stability -->
-  <option cone="elliptic" impratio="10" timestep="0.25"/>
-  
+<mujoco model="sorting_scene">
+  <!-- 仿真参数：timestep=0.002 保证接触稳定性 -->
+  <option cone="elliptic" impratio="10" timestep="0.002"/>
+
+  <!-- 引入机械臂模型 -->
   <include file="test4.xml"/>
-  
+
   <statistic center="0 0 0.1" extent="0.6"/>
-  
+
+  <!-- 视觉设置 -->
   <visual>
     <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
     <rgba haze="0.15 0.25 0.35 1"/>
     <global azimuth="150" elevation="-20" offheight="640"/>
   </visual>
-  
+
+  <!-- 场景材质 -->
   <asset>
     <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
-    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
-    markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge"
+             rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8"
+             width="300" height="300"/>
     <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+
+    <!-- 物体材质 -->
+    <material name="mat_red"    rgba="0.9 0.15 0.15 1" specular="0.3" shininess="0.5"/>
+    <material name="mat_blue"   rgba="0.15 0.3 0.9 1"  specular="0.3" shininess="0.5"/>
+    <material name="mat_green"  rgba="0.15 0.8 0.25 1" specular="0.3" shininess="0.5"/>
+    <material name="mat_yellow" rgba="0.95 0.85 0.1 1" specular="0.3" shininess="0.5"/>
+
+    <!-- 分拣区域标记 -->
+    <material name="mat_zone_red"   rgba="0.9 0.15 0.15 0.3"/>
+    <material name="mat_zone_blue"  rgba="0.15 0.3 0.9 0.3"/>
+    <material name="mat_zone_green" rgba="0.15 0.8 0.25 0.3"/>
   </asset>
-  
+
   <worldbody>
+    <!-- 灯光 -->
     <light pos="0 0 3" dir="0 0 -1" directional="false"/>
-    <geom name="floor" size="10 10 0.05" type="plane" material="groundplane" pos="0 0 0" friction="1.0" contype="1" conaffinity="1"/> <!-- 增大地面的摩擦力 -->
-      <body name="cylinder" pos="-0.5 0.0 0.1">
-          <!-- 调整圆柱体的初始位置 -->
-          <freejoint name="red_cylinder_joint"/>
-          
-          <!-- 增加圆柱体的质量，使其更稳定 -->
-          <inertial pos="0 0 0" mass="10000.0" diaginertia="0.05 0.05 0.05"/> <!-- 进一步增加惯性矩，确保稳定性 -->
-          
-          <!-- 增加摩擦力，调整碰撞参数 -->
-          <geom type="cylinder" size="0.03 0.1" pos="0 0 0" rgba="1 0 0 1" 
-                friction="0.5" condim="4" name="red_cylinder" priority="1" contype="1" conaffinity="10"
-                /> <!-- 大幅降低solimp和solref，减少反弹 -->
-      </body>
+    <light pos="0.5 0.5 2" dir="-0.3 -0.3 -1" diffuse="0.4 0.4 0.4" directional="false"/>
 
+    <!-- 地面 -->
+    <geom name="floor" size="10 10 0.05" type="plane" material="groundplane"
+          pos="0 0 0" friction="1.0" contype="1" conaffinity="1"/>
 
+    <!-- ==================== 待分拣物体 ==================== -->
 
+    <!-- 红色圆柱 -->
+    <body name="red_cylinder" pos="-0.3 -0.15 0.03">
+      <freejoint name="red_cylinder_joint"/>
+      <inertial pos="0 0 0" mass="0.05" diaginertia="0.00001 0.00001 0.00001"/>
+      <geom name="red_cylinder_geom" type="cylinder" size="0.02 0.03"
+            material="mat_red" friction="1.0 0.05 0.01"
+            condim="4" contype="1" conaffinity="1" priority="1"/>
+    </body>
 
-    <camera name="camera_front" pos="0.049 0.5 0.225" xyaxes="-0.998 0.056 -0.000 -0.019 -0.335 0.942"/>
-    <camera name="camera_top" pos="0 0.1 0.6" euler="0 0 0" mode="fixed"/>
-    <camera name="camera_vizu" pos="-0.1 0.6 0.3" quat="-0.15 -0.1 0.6 1"/>
+    <!-- 蓝色方块 -->
+    <body name="blue_cube" pos="-0.35 0.1 0.025">
+      <freejoint name="blue_cube_joint"/>
+      <inertial pos="0 0 0" mass="0.05" diaginertia="0.00001 0.00001 0.00001"/>
+      <geom name="blue_cube_geom" type="box" size="0.025 0.025 0.025"
+            material="mat_blue" friction="1.0 0.05 0.01"
+            condim="4" contype="1" conaffinity="1" priority="1"/>
+    </body>
+
+    <!-- 绿色球体 -->
+    <body name="green_sphere" pos="-0.4 -0.05 0.025">
+      <freejoint name="green_sphere_joint"/>
+      <inertial pos="0 0 0" mass="0.04" diaginertia="0.000008 0.000008 0.000008"/>
+      <geom name="green_sphere_geom" type="sphere" size="0.025"
+            material="mat_green" friction="1.5 0.05 0.01"
+            condim="4" contype="1" conaffinity="1" priority="1"/>
+    </body>
+
+    <!-- 黄色小圆柱 -->
+    <body name="yellow_cylinder" pos="-0.25 0.15 0.02">
+      <freejoint name="yellow_cylinder_joint"/>
+      <inertial pos="0 0 0" mass="0.03" diaginertia="0.000005 0.000005 0.000005"/>
+      <geom name="yellow_cylinder_geom" type="cylinder" size="0.015 0.02"
+            material="mat_yellow" friction="1.0 0.05 0.01"
+            condim="4" contype="1" conaffinity="1" priority="1"/>
+    </body>
+
+    <!-- ==================== 分拣目标区域 ==================== -->
+
+    <!-- 红色放置区（右前） -->
+    <geom name="zone_red" type="cylinder" size="0.06 0.001" pos="-0.15 -0.35 0.001"
+          material="mat_zone_red" contype="0" conaffinity="0"/>
+    <site name="zone_red_center" pos="-0.15 -0.35 0.005" size="0.005" rgba="1 0 0 0.8"/>
+
+    <!-- 蓝色放置区（右后） -->
+    <geom name="zone_blue" type="cylinder" size="0.06 0.001" pos="-0.15 0.35 0.001"
+          material="mat_zone_blue" contype="0" conaffinity="0"/>
+    <site name="zone_blue_center" pos="-0.15 0.35 0.005" size="0.005" rgba="0 0 1 0.8"/>
+
+    <!-- 绿色放置区（左侧） -->
+    <geom name="zone_green" type="cylinder" size="0.06 0.001" pos="-0.5 0.0 0.001"
+          material="mat_zone_green" contype="0" conaffinity="0"/>
+    <site name="zone_green_center" pos="-0.5 0.0 0.005" size="0.005" rgba="0 1 0 0.8"/>
+
+    <!-- ==================== 相机 ==================== -->
+    <camera name="camera_front" pos="0.049 0.5 0.225"
+            xyaxes="-0.998 0.056 -0.000 -0.019 -0.335 0.942"/>
+    <camera name="camera_top" pos="-0.2 0.0 0.8" euler="0 0 0" mode="fixed"/>
+    <camera name="camera_side" pos="0.5 0.0 0.3" xyaxes="0 1 0 -0.3 0 1"/>
   </worldbody>
-  
 
 </mujoco>
