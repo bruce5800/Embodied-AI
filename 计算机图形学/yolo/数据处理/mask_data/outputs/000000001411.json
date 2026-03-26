@@ -1,0 +1,1 @@
+{"path":"E:\\jszn_bj\\day06\\mask_data\\000000001411.jpg","outputs":{"object":[{"name":"no_mask","bndbox":{"xmin":190,"ymin":12,"xmax":314,"ymax":176}},{"name":"no_mask","bndbox":{"xmin":335,"ymin":30,"xmax":470,"ymax":200}}]},"time_labeled":1753777501672,"labeled":true,"size":{"width":500,"height":333,"depth":3}}

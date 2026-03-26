@@ -1,0 +1,15 @@
+# 数据集的根目录路径 (建议使用绝对路径以避免错误)
+path: ./pcb_data
+
+# 训练集和验证集的图片目录（相对与 `path` 的路径，或绝对路径）
+train: images/train
+val: images/val
+# test: images/test  # (可选)
+
+# 类别数量 (您有多少个不同的类别就写几)
+nc: 2
+
+# 类别名称列表。此处的顺序必须与您标注文件中的 class_id 完全对应！
+names: 
+  0: erji
+  1: esp32

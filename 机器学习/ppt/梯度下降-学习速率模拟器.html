@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>梯度下降(Gradient Descent)模拟器</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+            background-color: #f4f7f9;
+            color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+            width: 100%;
+            max-width: 1400px;
+            background-color: #ffffff;
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .info-pane, .simulation-pane {
+            padding: 30px 40px;
+            box-sizing: border-box;
+        }
+        .info-pane {
+            flex: 1;
+            min-width: 400px;
+            background-color: #fdfdfd;
+            border-right: 1px solid #e0e0e0;
+        }
+        .simulation-pane {
+            flex: 2;
+            min-width: 500px;
+            display: flex;
+            flex-direction: column;
+        }
+        canvas {
+            width: 100%;
+            height: auto;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            flex-grow: 1;
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-top: 0;
+        }
+        h2 {
+            color: #34495e;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+            margin-top: 25px;
+        }
+        p, li {
+            line-height: 1.8;
+            color: #555;
+            font-size: 1.1em;
+        }
+        ul {
+            padding-left: 20px;
+        }
+        code {
+            background-color: #e8eaf6;
+            color: #3f51b5;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+        }
+        strong {
+            color: #c51162;
+        }
+        .controls {
+            margin-top: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        label {
+            font-weight: bold;
+        }
+        input[type="range"] {
+            width: 100%;
+            cursor: pointer;
+        }
+        .value-display {
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+            font-weight: bold;
+            color: #e74c3c;
+            background-color: #ecf0f1;
+            padding: 5px 10px;
+            border-radius: 5px;
+            display: inline-block;
+        }
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        button {
+            flex-grow: 1;
+            padding: 12px;
+            font-size: 1em;
+            font-weight: bold;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s, transform 0.1s;
+        }
+        button:active {
+            transform: scale(0.97);
+        }
+        #run-btn { background-color: #27ae60; }
+        #run-btn:hover { background-color: #229954; }
+        #step-btn { background-color: #3498db; }
+        #step-btn:hover { background-color: #2980b9; }
+        #reset-btn { background-color: #95a5a6; }
+        #reset-btn:hover { background-color: #7f8c8d; }
+        .stats {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #ecf0f1;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stats-item {
+            font-size: 1.1em;
+            margin: 5px 0;
+        }
+
+        @media (max-width: 1100px) {
+            .container { flex-direction: column; }
+            .info-pane { border-right: none; border-bottom: 1px solid #e0e0e0; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="info-pane">
+            <h1>梯度下降的数学解释</h1>
+            <p>现在我们把“蒙眼下山”的比喻翻译成数学语言：</p>
+            <ul>
+                <li><strong>梯度 (Gradient):</strong> 就是那个“下坡最陡的方向”。在数学上，梯度是一个向量，指向函数值<strong>增长最快</strong>的方向。因此，<strong>梯度的反方向</strong>就是函数值下降最快的方向。</li>
+                <li><strong>学习率 (Learning Rate):</strong> 就是你下山时“每一步迈多大”。它是一个需要我们手动设置的超参数。
+                    <ul>
+                        <li>如果学习率<strong>太大</strong>，你可能一步就迈过了谷底，导致在谷底两侧来回震荡，甚至离谷底越来越远（发散）。</li>
+                        <li>如果学习率<strong>太小</strong>，你每一步都前进一点点，下山速度会非常慢，训练时间极长。</li>
+                    </ul>
+                </li>
+            </ul>
+            <p>梯度下降的过程就是：<code>新参数 = 旧参数 - 学习率 × 梯度</code>，通过这样反复迭代更新参数，最终使损失函数达到最小值。</p>
+            <h2>与模拟器互动</h2>
+            <p>右侧的抛物线代表一个简单的损失函数。<strong>你的目标是让小球到达谷底（损失最小）</strong>。请尝试调整<strong>学习率</strong>和<strong>起始位置</strong>，然后点击“运行”，观察小球的运动轨迹！</p>
+        </div>
+        <div class="simulation-pane">
+            <canvas id="simulation-canvas" width="800" height="600"></canvas>
+            <div class="controls">
+                <div class="control-group">
+                    <label for="lr-slider">学习率 (Learning Rate): <span id="lr-value" class="value-display">0.10</span></label>
+                    <input type="range" id="lr-slider" min="0.01" max="1.01" step="0.01" value="0.10">
+                </div>
+                <div class="control-group">
+                    <label for="start-slider">起始位置 (Initial Position): <span id="start-value" class="value-display">-4.0</span></label>
+                    <input type="range" id="start-slider" min="-4.5" max="4.5" step="0.1" value="-4.0">
+                </div>
+                <div class="button-group">
+                    <button id="run-btn">运行</button>
+                    <button id="step-btn">单步执行</button>
+                    <button id="reset-btn">重置</button>
+                </div>
+            </div>
+            <div class="stats">
+                <div class="stats-item">迭代次数: <span id="iterations-value">0</span></div>
+                <div class="stats-item">当前位置 (x): <span id="position-value">-4.000</span></div>
+                <div class="stats-item">状态: <span id="status-value">准备就绪</span></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // --- Setup ---
+        const canvas = document.getElementById('simulation-canvas');
+        const ctx = canvas.getContext('2d');
+        const lrSlider = document.getElementById('lr-slider');
+        const startSlider = document.getElementById('start-slider');
+        const lrValueDisplay = document.getElementById('lr-value');
+        const startValueDisplay = document.getElementById('start-value');
+        const runBtn = document.getElementById('run-btn');
+        const stepBtn = document.getElementById('step-btn');
+        const resetBtn = document.getElementById('reset-btn');
+        const iterationsValue = document.getElementById('iterations-value');
+        const positionValue = document.getElementById('position-value');
+        const statusValue = document.getElementById('status-value');
+
+        // --- Configuration ---
+        const xMin = -5, xMax = 5;
+        const yMin = -1, yMax = 25;
+        const padding = 50;
+
+        // --- State Variables ---
+        let learningRate = parseFloat(lrSlider.value);
+        let startX = parseFloat(startSlider.value);
+        let currentX = startX;
+        let iterations = 0;
+        let path = [];
+        let animationFrameId = null;
+
+        // --- Loss Function and its Gradient ---
+        const lossFunction = x => x * x; // f(x) = x^2
+        const gradient = x => 2 * x;     // f'(x) = 2x
+
+        // --- Drawing Functions ---
+        function mapToCanvas(x, y) {
+            const canvasWidth = canvas.width;
+            const canvasHeight = canvas.height;
+            const canvasX = padding + (x - xMin) / (xMax - xMin) * (canvasWidth - 2 * padding);
+            const canvasY = canvasHeight - padding - (y - yMin) / (yMax - yMin) * (canvasHeight - 2 * padding);
+            return { x: canvasX, y: canvasY };
+        }
+
+        function drawAxes() {
+            ctx.beginPath();
+            ctx.strokeStyle = '#bdc3c7';
+            ctx.lineWidth = 1;
+            // Y-axis
+            const origin = mapToCanvas(0, yMin);
+            ctx.moveTo(origin.x, padding);
+            ctx.lineTo(origin.x, canvas.height - padding);
+            // X-axis
+            const yZero = mapToCanvas(xMin, 0);
+            ctx.moveTo(padding, yZero.y);
+            ctx.lineTo(canvas.width - padding, yZero.y);
+            ctx.stroke();
+        }
+
+        function drawFunctionCurve() {
+            ctx.beginPath();
+            ctx.strokeStyle = '#3498db';
+            ctx.lineWidth = 3;
+            for (let x = xMin; x <= xMax; x += 0.05) {
+                const { x: cx, y: cy } = mapToCanvas(x, lossFunction(x));
+                if (x === xMin) ctx.moveTo(cx, cy);
+                else ctx.lineTo(cx, cy);
+            }
+            ctx.stroke();
+        }
+
+        function drawPath() {
+            if (path.length < 2) return;
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(231, 76, 60, 0.7)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+            const startPoint = mapToCanvas(path[0].x, path[0].y);
+            ctx.moveTo(startPoint.x, startPoint.y);
+            for (let i = 1; i < path.length; i++) {
+                const point = mapToCanvas(path[i].x, path[i].y);
+                ctx.lineTo(point.x, point.y);
+            }
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        function drawCurrentPoint() {
+            const y = lossFunction(currentX);
+            const { x: cx, y: cy } = mapToCanvas(currentX, y);
+            ctx.beginPath();
+            ctx.arc(cx, cy, 8, 0, 2 * Math.PI);
+            ctx.fillStyle = '#e74c3c';
+            ctx.fill();
+            ctx.strokeStyle = '#c0392b';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+        
+        function fullDraw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawAxes();
+            drawFunctionCurve();
+            drawPath();
+            drawCurrentPoint();
+        }
+
+        // --- Core Logic ---
+        function gradientDescentStep() {
+            if (iterations >= 200) {
+                stopAnimation("达到最大迭代次数");
+                return;
+            }
+            
+            const grad = gradient(currentX);
+            const prevX = currentX;
+            currentX = currentX - learningRate * grad;
+            
+            if (Math.abs(currentX) > 1e4) {
+                 stopAnimation("发散！学习率过大");
+                 return;
+            }
+
+            path.push({ x: prevX, y: lossFunction(prevX) });
+            path.push({ x: currentX, y: lossFunction(currentX) });
+            iterations++;
+            
+            updateUI();
+
+            if (Math.abs(prevX - currentX) < 1e-5) {
+                stopAnimation("收敛成功！");
+            }
+        }
+
+        function runAnimation() {
+            animationFrameId = requestAnimationFrame(() => {
+                gradientDescentStep();
+                fullDraw();
+                if (animationFrameId) runAnimation();
+            });
+        }
+        
+        function stopAnimation(message) {
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+                animationFrameId = null;
+                statusValue.textContent = message;
+                runBtn.textContent = "运行";
+            }
+        }
+        
+        function updateUI() {
+            iterationsValue.textContent = iterations;
+            positionValue.textContent = currentX.toFixed(3);
+        }
+
+        function reset() {
+            stopAnimation("准备就绪");
+            learningRate = parseFloat(lrSlider.value);
+            startX = parseFloat(startSlider.value);
+            currentX = startX;
+            iterations = 0;
+            path = [];
+            updateUI();
+            fullDraw();
+        }
+
+        // --- Event Listeners ---
+        lrSlider.addEventListener('input', e => {
+            learningRate = parseFloat(e.target.value);
+            lrValueDisplay.textContent = learningRate.toFixed(2);
+            if (!animationFrameId) reset();
+        });
+
+        startSlider.addEventListener('input', e => {
+            startX = parseFloat(e.target.value);
+            startValueDisplay.textContent = startX.toFixed(1);
+            if (!animationFrameId) reset();
+        });
+
+        stepBtn.addEventListener('click', () => {
+            if (animationFrameId) stopAnimation("已暂停");
+            statusValue.textContent = "单步执行中...";
+            gradientDescentStep();
+            fullDraw();
+        });
+
+        runBtn.addEventListener('click', () => {
+            if (animationFrameId) {
+                stopAnimation("已暂停");
+            } else {
+                if (iterations > 0 && Math.abs(currentX) < 1e-4) {
+                    reset();
+                }
+                statusValue.textContent = "运行中...";
+                runBtn.textContent = "暂停";
+                runAnimation();
+            }
+        });
+
+        resetBtn.addEventListener('click', reset);
+
+        // --- Initial Call ---
+        reset();
+    });
+    </script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+1. 切换工作目录 
+cd /d E:\jszn_bj\day02\软件\HostProtocol    # 根据自己的文件路径去修改
+
+2. 创建虚拟环境
+
+conda create -n  hostprotocol python==3.10
+
+#等待数据的下载。 看网速情况
+
+3. 激活虚拟环境
+conda activate hostprotocol
+
+4. 安装对应的依赖
+pip install -r python3.10-requirements.txt
+conda install 
+
+5. 运行你的python的代码
+
+
+6. conda deactivate hostprotocol

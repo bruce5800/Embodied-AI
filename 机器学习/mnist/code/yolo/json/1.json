@@ -1,0 +1,1 @@
+{"path":"E:\\sz_gypx02\\day05\\pcb_data\\images\\1.jpg","outputs":{"object":[{"name":"erji","bndbox":{"xmin":445,"ymin":322,"xmax":915,"ymax":808}},{"name":"esp32","bndbox":{"xmin":1025,"ymin":424,"xmax":1217,"ymax":802}}]},"time_labeled":1760776097032,"labeled":true,"size":{"width":1920,"height":1080,"depth":3}}

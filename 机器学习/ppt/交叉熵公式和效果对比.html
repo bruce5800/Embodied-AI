@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>交叉熵 vs. MSE 损失函数模拟器</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+            background-color: #f4f7f9;
+            color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+            width: 100%;
+            max-width: 1400px;
+            background-color: #ffffff;
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .info-pane, .simulation-pane {
+            padding: 30px 40px;
+            box-sizing: border-box;
+        }
+        .info-pane {
+            flex: 1;
+            min-width: 400px;
+            background-color: #fdfdfd;
+            border-right: 1px solid #e0e0e0;
+        }
+        .simulation-pane {
+            flex: 2;
+            min-width: 500px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        canvas {
+            width: 100%;
+            max-width: 700px;
+            height: auto;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            aspect-ratio: 3/2;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+            text-align: center;
+            margin-top: 0;
+        }
+        h2 {
+            font-size: 1.5em;
+            color: #34495e;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+        h3 {
+            font-size: 1.2em;
+            color: #34495e;
+            text-align: left;
+            margin-top: 25px;
+            margin-bottom: 10px;
+        }
+        p, li {
+            line-height: 1.8;
+            color: #555;
+            font-size: 1.1em;
+        }
+        ul { padding-left: 20px; }
+        strong { color: #c51162; }
+        .formula-box {
+            background-color: #e8f4f8;
+            border-left: 4px solid #3498db;
+            padding: 15px;
+            margin: 15px 0;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+            font-size: 1.1em;
+            line-height: 1.9;
+            color: #34495e;
+        }
+        .controls {
+            width: 100%;
+            max-width: 700px;
+            margin-top: 25px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .control-group {
+            background-color: #ecf0f1;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        .control-group label {
+            font-weight: bold;
+            font-size: 1.1em;
+            margin-bottom: 10px;
+            display: block;
+        }
+        input[type="range"] {
+            width: 100%;
+            cursor: pointer;
+        }
+        .toggle-buttons {
+            display: flex;
+            gap: 10px;
+        }
+        .toggle-buttons button {
+            flex: 1;
+            padding: 10px;
+            font-size: 1em;
+            border: 2px solid #bdc3c7;
+            background-color: #fff;
+            color: #7f8c8d;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .toggle-buttons button.active {
+            background-color: #3498db;
+            color: white;
+            border-color: #2980b9;
+            font-weight: bold;
+        }
+        .results-display {
+            margin-top: 20px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        .result-box {
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .result-box .label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+        .result-box .value {
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+            font-size: 1.4em;
+            font-weight: bold;
+        }
+        #ce-box { background-color: #fff0f0; border: 1px solid #e74c3c; }
+        #ce-box .value { color: #c0392b; }
+        #mse-box { background-color: #eaf2ff; border: 1px solid #3498db; }
+        #mse-box .value { color: #2980b9; }
+
+        @media (max-width: 1200px) {
+            .container { flex-direction: column; }
+            .info-pane { border-right: none; border-bottom: 1px solid #e0e0e0; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="info-pane">
+            <h2>为何逻辑回归使用交叉熵？</h2>
+            <p>我们已经知道如何评估分类模型，但逻辑回归在训练时，它的损失函数是什么呢？它不是MSE，而是<strong>交叉熵损失 (Cross-Entropy Loss)</strong>。</p>
+            <p>交叉熵源于信息论，它衡量的是模型预测的<strong>概率分布</strong>与真实的<strong>标签分布</strong>之间的差异。</p>
+            
+            <h3>核心思想</h3>
+            <p>对<strong>离谱的错误预测</strong>，施以<strong>巨大的惩罚</strong>。</p>
+            <ul>
+                <li>如果一个样本的真实标签是“猫”（标签为1），而模型预测它是猫的概率是 <strong>0.99</strong>，那么交叉熵损失会<strong>非常小</strong>。</li>
+                <li>但如果模型预测它是猫的概率只有 <strong>0.01</strong>，这是一个极其自信但完全错误的预测，交叉熵损失会给出一个<strong>巨大的惩罚值</strong>。</li>
+            </ul>
+            <p>这种机制会激励模型不仅要“猜对”，还要“<strong>充满信心地猜对</strong>”。请在右侧的模拟器中亲身体验这一区别！</p>
+
+            <h3>损失函数公式</h3>
+            <div class="formula-box">
+                设 <code>y</code> 为真实标签 (0或1)，<code>p</code> 为模型预测 <code>y=1</code> 的概率。<br><br>
+                <strong>当真实标签 y = 1:</strong><br>
+                Loss = -log(p)<br><br>
+                <strong>当真实标签 y = 0:</strong><br>
+                Loss = -log(1-p)<br><br>
+                <strong>合并后通用公式:</strong><br>
+                Loss = -[ y*log(p) + (1-y)*log(1-p) ]
+            </div>
+
+        </div>
+        <div class="simulation-pane">
+            <h1>交叉熵 vs. MSE 损失函数对比</h1>
+            <canvas id="simulation-canvas"></canvas>
+            <div class="controls">
+                <div class="control-group">
+                    <label>第一步: 选择真实标签 (Ground Truth)</label>
+                    <div class="toggle-buttons">
+                        <button id="btn-true-1" class="active">真实标签 = 1 (例如：“是猫”)</button>
+                        <button id="btn-true-0">真实标签 = 0 (例如：“不是猫”)</button>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label for="prob-slider">第二步: 拖动滑块，改变模型的预测概率</label>
+                    <input type="range" id="prob-slider" min="0" max="1" step="0.001" value="0.5">
+                </div>
+                <div class="results-display">
+                    <div id="ce-box" class="result-box">
+                        <span class="label" style="color:#c0392b;">交叉熵损失</span>
+                        <span id="ce-value" class="value">0.693</span>
+                    </div>
+                    <div id="mse-box" class="result-box">
+                        <span class="label" style="color:#2980b9;">均方误差(MSE)损失</span>
+                        <span id="mse-value" class="value">0.250</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // --- Setup ---
+        const canvas = document.getElementById('simulation-canvas');
+        const ctx = canvas.getContext('2d');
+        const probSlider = document.getElementById('prob-slider');
+        const btnTrue1 = document.getElementById('btn-true-1');
+        const btnTrue0 = document.getElementById('btn-true-0');
+        const ceValueDisplay = document.getElementById('ce-value');
+        const mseValueDisplay = document.getElementById('mse-value');
+        
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        ctx.scale(dpr, dpr);
+
+        // --- State & Config ---
+        let trueLabel = 1;
+        const xMin = 0, xMax = 1;
+        const yMax = 5; // Clip y-axis for better visualization
+        const padding = 50;
+        const epsilon = 1e-9; // To avoid log(0)
+        const ceColor = '#e74c3c';
+        const mseColor = '#3498db';
+
+        // --- Math Functions ---
+        const crossEntropyLoss = (p, y) => {
+            p = Math.max(epsilon, Math.min(1 - epsilon, p)); // Clamp to avoid infinity
+            return -(y * Math.log(p) + (1 - y) * Math.log(1 - p));
+        };
+        const mseLoss = (p, y) => (p - y) ** 2;
+
+        // --- Drawing Functions ---
+        const mapToCanvas = (x, y) => {
+            const canvasWidth = canvas.clientWidth;
+            const canvasHeight = canvas.clientHeight;
+            const canvasX = padding + (x - xMin) / (xMax - xMin) * (canvasWidth - 2 * padding);
+            const canvasY = canvasHeight - padding - (y / yMax) * (canvasHeight - 2 * padding);
+            return { x: canvasX, y: canvasY };
+        };
+
+        const drawAxes = () => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.beginPath();
+            ctx.strokeStyle = '#bdc3c7';
+            ctx.lineWidth = 1;
+            // Y-axis
+            ctx.moveTo(padding, padding);
+            ctx.lineTo(padding, canvas.clientHeight - padding);
+            // X-axis
+            ctx.lineTo(canvas.clientWidth - padding, canvas.clientHeight - padding);
+            ctx.stroke();
+
+            ctx.fillStyle = '#7f8c8d';
+            ctx.font = '14px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText("模型预测概率 P(y=1)", canvas.clientWidth / 2, canvas.clientHeight - 15);
+            ctx.save();
+            ctx.rotate(-Math.PI / 2);
+            ctx.fillText("损失 (Loss)", -canvas.clientHeight / 2, 20);
+            ctx.restore();
+        };
+
+        const drawCurve = (lossFunc, color) => {
+            ctx.beginPath();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 3;
+            const step = 0.01;
+            for (let p = xMin; p <= xMax; p += step) {
+                if (p === 0 || p === 1) continue; // Skip endpoints for CE
+                const loss = lossFunc(p, trueLabel);
+                const { x: cx, y: cy } = mapToCanvas(p, loss);
+                if (p === step) ctx.moveTo(cx, cy);
+                else ctx.lineTo(cx, cy);
+            }
+            ctx.stroke();
+        };
+
+        const drawInteractiveElements = (prob) => {
+            const ceLossValue = crossEntropyLoss(prob, trueLabel);
+            const mseLossValue = mseLoss(prob, trueLabel);
+
+            const pointOnXAxis = mapToCanvas(prob, 0);
+            const cePoint = mapToCanvas(prob, ceLossValue);
+            const msePoint = mapToCanvas(prob, mseLossValue);
+            
+            // Vertical line
+            ctx.beginPath();
+            ctx.setLineDash([4, 4]);
+            ctx.strokeStyle = 'rgba(44, 62, 80, 0.5)';
+            ctx.moveTo(pointOnXAxis.x, pointOnXAxis.y);
+            ctx.lineTo(pointOnXAxis.x, padding);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            
+            // Point for CE
+            ctx.beginPath();
+            ctx.arc(cePoint.x, cePoint.y, 6, 0, 2 * Math.PI);
+            ctx.fillStyle = ceColor;
+            ctx.fill();
+
+            // Point for MSE
+            ctx.beginPath();
+            ctx.arc(msePoint.x, msePoint.y, 6, 0, 2 * Math.PI);
+            ctx.fillStyle = mseColor;
+            ctx.fill();
+        };
+
+        const update = () => {
+            const prob = parseFloat(probSlider.value);
+            
+            drawAxes();
+            drawCurve(crossEntropyLoss, ceColor);
+            drawCurve(mseLoss, mseColor);
+            drawInteractiveElements(prob);
+            
+            const ceLoss = crossEntropyLoss(prob, trueLabel);
+            const mseLossVal = mseLoss(prob, trueLabel);
+            
+            ceValueDisplay.textContent = ceLoss.toFixed(3);
+            mseValueDisplay.textContent = mseLossVal.toFixed(3);
+        };
+
+        // --- Event Handlers ---
+        probSlider.addEventListener('input', update);
+        
+        btnTrue1.addEventListener('click', () => {
+            trueLabel = 1;
+            btnTrue1.classList.add('active');
+            btnTrue0.classList.remove('active');
+            update();
+        });
+
+        btnTrue0.addEventListener('click', () => {
+            trueLabel = 0;
+            btnTrue0.classList.add('active');
+            btnTrue1.classList.remove('active');
+            update();
+        });
+
+        // --- Initial Call ---
+        update();
+    });
+    </script>
+</body>
+</html>

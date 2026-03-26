@@ -1,0 +1,5 @@
+- dataset_repo_id=pick/so100_test
+- policy=act_so100_real
+- env=so100_real
+- device=cpu
+- wandb.enable=false

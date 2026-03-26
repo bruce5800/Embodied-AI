@@ -1,0 +1,22 @@
+1.打开cmd
+
+pip install openai mcp -i https://pypi.tuna.tsinghua.edu.cn/simple  
+
+pip install fastmcp -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+pip install pyttsx3 -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+pip install pyserial  -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+
+2. 在当前文件夹下， 打开一个新的cmd窗口，先运行mcp的服务器端 
+ python mcp_server.py
+
+
+3. 在当前文件夹下， 打开一个新的cmd窗口，运行mcp的客户端
+python 01_mcp_deepseek_chat.py
+
+聊天示例：  3+5=？
+给我讲一个故事
+把你讲的故事，音频播放 出来
+

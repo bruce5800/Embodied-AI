@@ -1,0 +1,24 @@
+1. 安装python命令运行需要的包， 打开cmd的命令行 窗口，执行下面的命令
+
+  pip install pyaudio -i  https://pypi.tuna.tsinghua.edu.cn/simple
+  pip install openai-whisper -i  https://pypi.tuna.tsinghua.edu.cn/simple
+  pip install transformers accelerate -i  https://pypi.aliyun.com/simple
+
+
+2. 运行代码   01_录音demo.py
+                     02_录音转文本.py
+    运行方式，在代码的目录里面 运行cmd，执行 python 01xxx.py  02xx.py
+
+
+3.  运行转文本代码报错，找不到模型文件。
+     确保代码的相同文件夹下，有base.pt 的文件存在。
+
+
+4.  如果win11系统不是旗舰版，或者不是完整版本。系统里面没有ffmpeg的库，需要手动安装ffmpeg的库，并且配置环境变量。
+     解压ffmpeg的压缩包，到c盘目录。  C:\ffmpeg
+     配置环境变量，让系统能够找到ffmpeg。
+     编辑系统的环境变量，点击环境变量，找到path，点击编辑。添加“C:\ffmpeg\bin”
+      检查环境变量。  新开一个cmd的窗体，输入 ffmpeg，出现一堆英文，就说明环境变量安装好了。
+
+
+       

@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>交互式多层神经网络模拟器</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f2f5;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            color: #1a237e;
+        }
+        .container {
+            display: flex;
+            width: 100%;
+            max-width: 1400px;
+            gap: 20px;
+        }
+        .controls {
+            flex: 1;
+            padding: 20px;
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            min-width: 280px;
+        }
+        .control-group {
+            margin-bottom: 20px;
+        }
+        .control-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+            color: #3f51b5;
+        }
+        .control-group input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .control-group small {
+            display: block;
+            margin-top: 5px;
+            color: #777;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            background-color: #3f51b5;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+            margin-top: 10px;
+        }
+        button:hover {
+            background-color: #303f9f;
+        }
+        button:disabled {
+            background-color: #9fa8da;
+            cursor: not-allowed;
+        }
+        #network-canvas {
+            flex: 3;
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .io-display {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #eee;
+        }
+        .io-display h3 {
+            margin-top: 0;
+            color: #3f51b5;
+        }
+        .io-values {
+            font-family: 'Courier New', Courier, monospace;
+            background-color: #e8eaf6;
+            padding: 10px;
+            border-radius: 4px;
+            word-wrap: break-word;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>交互式多层神经网络模拟器</h1>
+
+    <div class="container">
+        <div class="controls">
+            <h2>控制面板</h2>
+
+            <div class="control-group">
+                <label for="input-neurons">输入层神经元数量</label>
+                <input type="number" id="input-neurons" value="3" min="1" max="20">
+            </div>
+
+            <div class="control-group">
+                <label for="hidden-layers">隐藏层结构</label>
+                <input type="text" id="hidden-layers" value="4,5,4">
+                <small>用逗号分隔每层的神经元数量，例如：4,5,4</small>
+            </div>
+
+            <div class="control-group">
+                <label for="output-neurons">输出层神经元数量</label>
+                <input type="number" id="output-neurons" value="2" min="1" max="20">
+            </div>
+
+            <button id="update-btn">更新网络结构</button>
+            <button id="propagate-btn">传播随机数据</button>
+            
+            <div id="io-display" class="io-display">
+                <h3>数据面板</h3>
+                <h4>输入值:</h4>
+                <div id="input-values" class="io-values">尚未输入</div>
+                <h4>输出值:</h4>
+                <div id="output-values" class="io-values">尚未计算</div>
+            </div>
+        </div>
+
+        <canvas id="network-canvas"></canvas>
+    </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const canvas = document.getElementById('network-canvas');
+    const ctx = canvas.getContext('2d');
+
+    const inputNeuronsEl = document.getElementById('input-neurons');
+    const hiddenLayersEl = document.getElementById('hidden-layers');
+    const outputNeuronsEl = document.getElementById('output-neurons');
+    const updateBtn = document.getElementById('update-btn');
+    const propagateBtn = document.getElementById('propagate-btn');
+    const inputValuesEl = document.getElementById('input-values');
+    const outputValuesEl = document.getElementById('output-values');
+
+    let network = null;
+    let animationRunning = false;
+    const ANIMATION_DELAY = 400; // 动画每一步的延迟（毫秒）
+
+    class Neuron {
+        constructor(x, y) {
+            this.x = x;
+            this.y = y;
+            this.radius = 15;
+            this.value = 0; // 也可视为激活值
+            this.color = 'rgba(159, 168, 218, 0.7)'; // 默认颜色 Indio
+        }
+
+        draw(ctx, activation) {
+            // 根据激活值动态改变颜色
+            const alpha = 0.5 + activation * 0.5;
+            this.color = `rgba(63, 81, 181, ${alpha})`;
+
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fillStyle = this.color;
+            ctx.fill();
+
+            // 绘制边框
+            ctx.strokeStyle = '#303f9f';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // 显示激活值
+            ctx.fillStyle = 'white';
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(activation.toFixed(2), this.x, this.y);
+        }
+    }
+
+    class Layer {
+        constructor(neuronCount, xPos, canvasHeight) {
+            this.neurons = [];
+            const ySpacing = canvasHeight / (neuronCount + 1);
+            for (let i = 0; i < neuronCount; i++) {
+                const y = ySpacing * (i + 1);
+                this.neurons.push(new Neuron(xPos, y));
+            }
+        }
+    }
+
+    class NeuralNetwork {
+        constructor(layerSizes, canvasWidth, canvasHeight) {
+            this.layers = [];
+            const xSpacing = canvasWidth / (layerSizes.length + 1);
+            
+            layerSizes.forEach((size, i) => {
+                const x = xSpacing * (i + 1);
+                this.layers.push(new Layer(size, x, canvasHeight));
+            });
+            
+            // 为简单起见，我们不在这里存储权重和偏置
+            // 它们将在传播时动态生成和使用
+        }
+
+        draw(ctx) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            this.drawConnections(ctx);
+            this.drawNeurons(ctx);
+        }
+        
+        drawConnections(ctx) {
+            ctx.strokeStyle = 'rgba(197, 202, 233, 0.5)';
+            ctx.lineWidth = 1;
+
+            for (let i = 0; i < this.layers.length - 1; i++) {
+                const currentLayer = this.layers[i];
+                const nextLayer = this.layers[i+1];
+                currentLayer.neurons.forEach(neuron1 => {
+                    nextLayer.neurons.forEach(neuron2 => {
+                        ctx.beginPath();
+                        ctx.moveTo(neuron1.x, neuron1.y);
+                        ctx.lineTo(neuron2.x, neuron2.y);
+                        ctx.stroke();
+                    });
+                });
+            }
+        }
+        
+        drawNeurons(ctx) {
+            this.layers.forEach(layer => {
+                layer.neurons.forEach(neuron => {
+                    neuron.draw(ctx, neuron.value);
+                });
+            });
+        }
+        
+        async animatePropagation(inputs) {
+            if (animationRunning) return;
+            animationRunning = true;
+            updateBtn.disabled = true;
+            propagateBtn.disabled = true;
+
+            // 1. 重置所有神经元的值
+            this.layers.forEach(layer => layer.neurons.forEach(n => n.value = 0));
+            this.draw(ctx);
+            outputValuesEl.innerText = '计算中...';
+
+            // 2. 设置输入层
+            const inputLayer = this.layers[0];
+            if (inputs.length !== inputLayer.neurons.length) {
+                alert('输入数据数量与输入层神经元数量不匹配!');
+                animationRunning = false;
+                updateBtn.disabled = false;
+                propagateBtn.disabled = false;
+                return;
+            }
+            inputs.forEach((val, i) => inputLayer.neurons[i].value = val);
+            
+            inputValuesEl.innerText = `[${inputs.map(v => v.toFixed(2)).join(', ')}]`;
+            this.draw(ctx);
+            await sleep(ANIMATION_DELAY);
+            
+            let previousLayerActivations = inputs;
+
+            // 3. 逐层传播
+            for (let i = 1; i < this.layers.length; i++) {
+                const currentLayer = this.layers[i];
+                const previousLayer = this.layers[i-1];
+                const currentLayerActivations = [];
+                
+                // 模拟权重（每次传播都随机生成）
+                const weights = Array(currentLayer.neurons.length).fill(0).map(() => 
+                    Array(previousLayer.neurons.length).fill(0).map(() => Math.random() * 2 - 1)
+                );
+                // 模拟偏置
+                const biases = Array(currentLayer.neurons.length).fill(0).map(() => Math.random() * 2 - 1);
+
+                for (let j = 0; j < currentLayer.neurons.length; j++) {
+                    let weightedSum = biases[j];
+                    for (let k = 0; k < previousLayer.neurons.length; k++) {
+                        weightedSum += previousLayerActivations[k] * weights[j][k];
+                        await this.animateConnection(ctx, previousLayer.neurons[k], currentLayer.neurons[j]);
+                    }
+                    const activation = this.sigmoid(weightedSum);
+                    currentLayer.neurons[j].value = activation;
+                    currentLayerActivations.push(activation);
+                    this.draw(ctx); // 重绘以更新神经元颜色
+                }
+                
+                previousLayerActivations = currentLayerActivations;
+                await sleep(ANIMATION_DELAY);
+            }
+            
+            // 4. 显示最终输出
+            const outputActivations = this.layers[this.layers.length - 1].neurons.map(n => n.value);
+            outputValuesEl.innerText = `[${outputActivations.map(v => v.toFixed(3)).join(', ')}]`;
+
+            animationRunning = false;
+            updateBtn.disabled = false;
+            propagateBtn.disabled = false;
+        }
+        
+        async animateConnection(ctx, fromNeuron, toNeuron) {
+            ctx.beginPath();
+            ctx.moveTo(fromNeuron.x, fromNeuron.y);
+            ctx.lineTo(toNeuron.x, toNeuron.y);
+            ctx.strokeStyle = '#ffeb3b'; // 高亮连接为黄色
+            ctx.lineWidth = 3;
+            ctx.stroke();
+            await sleep(10); // 短暂高亮
+            this.draw(ctx); // 重绘以恢复正常状态
+        }
+
+        sigmoid(x) {
+            return 1 / (1 + Math.exp(-x));
+        }
+    }
+
+    function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function updateNetwork() {
+        // 解析输入
+        const inputCount = parseInt(inputNeuronsEl.value);
+        const hiddenLayersStr = hiddenLayersEl.value.trim();
+        const outputCount = parseInt(outputNeuronsEl.value);
+
+        const hiddenCounts = hiddenLayersStr === '' ? [] : hiddenLayersStr.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n) && n > 0);
+        
+        if (inputCount < 1 || outputCount < 1) {
+            alert('输入层和输出层神经元数量必须大于0');
+            return;
+        }
+        
+        const layerSizes = [inputCount, ...hiddenCounts, outputCount];
+        
+        // 设置Canvas尺寸
+        const parentWidth = canvas.parentElement.clientWidth;
+        const parentHeight = window.innerHeight * 0.8;
+        canvas.width = parentWidth;
+        canvas.height = parentHeight > 500 ? parentHeight : 500;
+        
+        network = new NeuralNetwork(layerSizes, canvas.width, canvas.height);
+        network.draw(ctx);
+
+        inputValuesEl.innerText = '尚未输入';
+        outputValuesEl.innerText = '尚未计算';
+    }
+
+    function propagateData() {
+        if (!network) {
+            alert('请先创建网络结构！');
+            return;
+        }
+        const inputSize = network.layers[0].neurons.length;
+        const randomInputs = Array.from({length: inputSize}, () => Math.random());
+        network.animatePropagation(randomInputs);
+    }
+    
+    // 事件监听
+    updateBtn.addEventListener('click', updateNetwork);
+    propagateBtn.addEventListener('click', propagateData);
+    window.addEventListener('resize', () => {
+        // 延迟执行，防止频繁触发
+        setTimeout(updateNetwork, 200);
+    });
+
+    // 初始加载
+    updateNetwork();
+});
+</script>
+
+</body>
+</html>
