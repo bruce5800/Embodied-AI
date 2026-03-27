@@ -3,3 +3,7 @@ base.pt
 __pycache__/
 *.pyc
 node_modules/
+
+# YOLO 训练数据（可通过 vision_pipeline.py generate 重新生成）
+dataset/
+runs/
