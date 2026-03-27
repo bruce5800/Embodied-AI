@@ -1,5 +1,6 @@
 .DS_Store
 base.pt
+yolo11n.pt
 __pycache__/
 *.pyc
 node_modules/
