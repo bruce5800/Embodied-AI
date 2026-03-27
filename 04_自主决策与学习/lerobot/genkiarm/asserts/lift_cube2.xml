@@ -103,8 +103,8 @@
     <site name="zone_green_center" pos="-0.5 0.0 0.005" size="0.005" rgba="0 1 0 0.8"/>
 
     <!-- ==================== 相机 ==================== -->
-    <camera name="camera_front" pos="0.049 0.5 0.225"
-            xyaxes="-0.998 0.056 -0.000 -0.019 -0.335 0.942"/>
+    <camera name="camera_front" pos="0.45 0.55 0.55"
+            xyaxes="-0.65 0.76 0.0 -0.36 -0.30 0.88"/>
     <camera name="camera_top" pos="-0.2 0.0 0.8" euler="0 0 0" mode="fixed"/>
     <camera name="camera_side" pos="0.5 0.0 0.3" xyaxes="0 1 0 -0.3 0 1"/>
   </worldbody>
