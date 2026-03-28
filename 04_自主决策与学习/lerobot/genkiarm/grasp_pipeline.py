@@ -630,6 +630,35 @@ def pick_and_place_one(mj_model, mj_data, yolo, target_name, place_pos,
     return False
 
 
+def execute_task_list(tasks, mj_model, mj_data, yolo, renderer, cam_name,
+                      do_place=True):
+    """执行一组 (object_name, place_pos) 任务并返回结果。"""
+    print(f"\n任务计划 ({len(tasks)} 个):")
+    for obj, pos in tasks:
+        print(f"  {obj:20s} → ({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f})")
+
+    results = {}
+    for i, (obj_name, place_pos) in enumerate(tasks):
+        print(f"\n{'#'*50}")
+        print(f"  任务 [{i+1}/{len(tasks)}]: {obj_name}")
+        print(f"{'#'*50}")
+
+        ok = pick_and_place_one(mj_model, mj_data, yolo, obj_name, place_pos,
+                                renderer, cam_name, do_place=do_place)
+        results[obj_name] = ok
+
+    # 汇总
+    print(f"\n{'='*50}")
+    print("  执行结果")
+    print(f"{'='*50}")
+    for obj_name, ok in results.items():
+        status = "✓ 成功" if ok else "✗ 失败"
+        print(f"  {obj_name:20s}  {status}")
+    success_count = sum(results.values())
+    print(f"\n  成功: {success_count}/{len(results)}")
+    return results
+
+
 def main():
     import json
 
@@ -643,7 +672,9 @@ def main():
     parser.add_argument("--no-place", action="store_true",
                         help="只抓取不放置（调试用）")
     parser.add_argument("--instructions", type=str, default=None,
-                        help="放置指令 JSON 文件路径（LLM 输出格式）")
+                        help="放置指令 JSON 文件路径")
+    parser.add_argument("--llm", action="store_true",
+                        help="启用 LLM 交互模式（用自然语言下达指令）")
     args = parser.parse_args()
 
     from ultralytics import YOLO
@@ -691,61 +722,100 @@ def main():
               f"pos=({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f})")
 
     cv2.imshow(WINDOW, det_img)
-    print("\n按任意键开始分拣...")
-    cv2.waitKey(0)
 
     do_place = not args.no_place
 
-    # ── 构建放置指令 ──
-    if args.instructions:
-        # 从 JSON 文件加载（LLM 输出）
-        with open(args.instructions, "r") as f:
-            instructions = json.load(f)
-        print(f"\n加载外部指令: {args.instructions} ({len(instructions)} 条)")
-    elif args.target:
-        # 指定单个目标，用默认规则
-        instructions = [{"object": args.target, "mode": "zone",
-                         "zone": DEFAULT_SORT_RULES.get(args.target)}]
+    # ═══════════════════════════════════════════════════
+    #  LLM 交互模式
+    # ═══════════════════════════════════════════════════
+    if args.llm:
+        from llm_planner import LLMPlanner
+
+        print("\n" + "="*50)
+        print("  LLM 交互模式（DeepSeek）")
+        print("  输入自然语言指令，如:")
+        print('    "把红色圆柱放到蓝色方块上面"')
+        print('    "把所有物体排成一排"')
+        print('    "把绿色球放到红色区域"')
+        print("  输入 quit 退出")
+        print("="*50)
+
+        planner = LLMPlanner()
+
+        while True:
+            print()
+            user_input = input("你想怎么摆？>>> ").strip()
+            if not user_input or user_input.lower() in ("quit", "exit", "q"):
+                break
+
+            # 重新检测，获取最新物体位置
+            detections, det_img = detect_objects(yolo, mj_model, mj_data, renderer)
+            cv2.imshow(WINDOW, det_img)
+            cv2.waitKey(1)
+
+            if not detections:
+                print("  场景中没有检测到物体")
+                continue
+
+            # LLM 解析
+            print(f"\n  DeepSeek 解析中...")
+            instructions = planner.parse(user_input, scene_objects=detections)
+
+            if not instructions:
+                print("  解析失败，请换个说法试试")
+                continue
+
+            print(f"\n  LLM 生成 {len(instructions)} 条指令:")
+            print(f"  {json.dumps(instructions, indent=2, ensure_ascii=False)}")
+
+            # 解析为具体任务
+            tasks = []
+            for inst in instructions:
+                resolved = resolve_place_target(inst, mj_model, mj_data)
+                tasks.extend(resolved)
+
+            if not tasks:
+                print("  没有可执行的任务")
+                continue
+
+            # 确认执行
+            print(f"\n  即将执行 {len(tasks)} 个任务，按任意键开始...")
+            cv2.waitKey(0)
+
+            execute_task_list(tasks, mj_model, mj_data, yolo,
+                              renderer, args.camera, do_place=do_place)
+
+        print("\nLLM 模式结束")
+
+    # ═══════════════════════════════════════════════════
+    #  非 LLM 模式：JSON 文件 / 指定目标 / 默认分拣
+    # ═══════════════════════════════════════════════════
     else:
-        # 默认：按分拣规则
-        instructions = build_default_instructions(detections)
+        print("\n按任意键开始分拣...")
+        cv2.waitKey(0)
 
-    # ── 解析指令 → 具体任务 ──
-    tasks = []  # [(object_name, place_pos), ...]
-    for inst in instructions:
-        resolved = resolve_place_target(inst, mj_model, mj_data)
-        tasks.extend(resolved)
+        # 构建放置指令
+        if args.instructions:
+            with open(args.instructions, "r") as f:
+                instructions = json.load(f)
+            print(f"\n加载外部指令: {args.instructions} ({len(instructions)} 条)")
+        elif args.target:
+            instructions = [{"object": args.target, "mode": "zone",
+                             "zone": DEFAULT_SORT_RULES.get(args.target)}]
+        else:
+            instructions = build_default_instructions(detections)
 
-    if not tasks:
-        print("没有可执行的任务")
-        renderer.close()
-        return
+        # 解析 → 执行
+        tasks = []
+        for inst in instructions:
+            resolved = resolve_place_target(inst, mj_model, mj_data)
+            tasks.extend(resolved)
 
-    print(f"\n任务计划 ({len(tasks)} 个):")
-    for obj, pos in tasks:
-        print(f"  {obj:20s} → ({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f})")
-
-    # ── 逐个执行 抓取 → 放置 ──
-    results = {}
-    for i, (obj_name, place_pos) in enumerate(tasks):
-        print(f"\n{'#'*50}")
-        print(f"  任务 [{i+1}/{len(tasks)}]: {obj_name}")
-        print(f"{'#'*50}")
-
-        ok = pick_and_place_one(mj_model, mj_data, yolo, obj_name, place_pos,
-                                renderer, args.camera, do_place=do_place)
-        results[obj_name] = ok
-
-    # ── 汇总 ──
-    print(f"\n{'='*50}")
-    print("  分拣结果汇总")
-    print(f"{'='*50}")
-    for obj_name, ok in results.items():
-        status = "✓ 成功" if ok else "✗ 失败"
-        print(f"  {obj_name:20s}  {status}")
-
-    success_count = sum(results.values())
-    print(f"\n  成功: {success_count}/{len(results)}")
+        if not tasks:
+            print("没有可执行的任务")
+        else:
+            execute_task_list(tasks, mj_model, mj_data, yolo,
+                              renderer, args.camera, do_place=do_place)
 
     print("\n按任意键退出...")
     cv2.waitKey(0)
