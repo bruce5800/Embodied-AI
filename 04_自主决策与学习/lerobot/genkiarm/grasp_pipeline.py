@@ -62,14 +62,137 @@ PLACE_HEIGHT = 0.08                  # 放置时松手的高度
 PLACE_HOVER_HEIGHT = 0.15            # 放置区上方悬停高度
 READY_JOINTS = [0.0, -0.8, 0.5, 0.3, 0.0]  # 就绪姿态
 
-# ─── 物体 → 放置区映射 ───
-# 每种物体对应一个分拣目标区域的中心坐标
-PLACE_ZONES = {
-    "red_cylinder":    np.array([-0.15, -0.35, 0.0]),   # zone_red
-    "blue_cube":       np.array([-0.15,  0.35, 0.0]),   # zone_blue
-    "green_sphere":    np.array([-0.50,  0.00, 0.0]),   # zone_green
-    "yellow_cylinder": np.array([-0.15,  0.00, 0.0]),   # zone_yellow
+# ─── 已知放置区（场景中预定义的区域）───
+ZONES = {
+    "zone_red":    np.array([-0.15, -0.35, 0.0]),
+    "zone_blue":   np.array([-0.15,  0.35, 0.0]),
+    "zone_green":  np.array([-0.50,  0.00, 0.0]),
+    "zone_yellow": np.array([-0.15,  0.00, 0.0]),
 }
+
+# ─── 默认分拣规则（物体 → 放置区名称）───
+# 当没有外部指令时使用此映射
+DEFAULT_SORT_RULES = {
+    "red_cylinder":    "zone_red",
+    "blue_cube":       "zone_blue",
+    "green_sphere":    "zone_green",
+    "yellow_cylinder": "zone_yellow",
+}
+
+
+# ═══════════════════════════════════════════════════════════════
+#  放置指令系统 — 为 LLM 接入设计
+# ═══════════════════════════════════════════════════════════════
+#
+#  LLM 只需输出一个 JSON 指令列表，每条指令是一个 dict:
+#
+#  支持的 mode:
+#    "zone"     → 放到预定义区域       {"object": "red_cylinder", "mode": "zone", "zone": "zone_blue"}
+#    "absolute" → 放到绝对坐标         {"object": "red_cylinder", "mode": "absolute", "position": [-0.3, 0.1, 0.0]}
+#    "relative" → 放到另一物体的相对位置 {"object": "red_cylinder", "mode": "relative",
+#                                        "ref_object": "blue_cube", "relation": "above", "offset": 0.08}
+#    "line"     → 多个物体排成一排      {"objects": ["red_cylinder", "blue_cube", "green_sphere"],
+#                                        "mode": "line", "start": [-0.4, -0.2, 0.0],
+#                                        "end": [-0.4, 0.2, 0.0]}
+#
+#  示例 — LLM 输出:
+#    user: "把红色圆柱放到蓝色方块上面"
+#    LLM → [{"object": "red_cylinder", "mode": "relative",
+#            "ref_object": "blue_cube", "relation": "above", "offset": 0.08}]
+#
+#    user: "把所有物体排成一排"
+#    LLM → [{"objects": ["red_cylinder","blue_cube","green_sphere","yellow_cylinder"],
+#            "mode": "line", "start": [-0.35, -0.25, 0.0], "end": [-0.35, 0.25, 0.0]}]
+
+def resolve_place_target(instruction, mj_model, mj_data):
+    """
+    将一条放置指令解析为具体的 (object_name, [x, y, z]) 列表。
+
+    Args:
+        instruction: dict, 放置指令
+        mj_model: MuJoCo model (用于查询物体当前位置)
+        mj_data:  MuJoCo data
+
+    Returns:
+        [(object_name, target_xyz), ...]  一条指令可能产生多个放置任务（如 line 模式）
+    """
+    mujoco.mj_forward(mj_model, mj_data)
+    mode = instruction.get("mode", "zone")
+
+    if mode == "zone":
+        # 放到预定义区域
+        obj = instruction["object"]
+        zone_name = instruction.get("zone", DEFAULT_SORT_RULES.get(obj))
+        if zone_name is None or zone_name not in ZONES:
+            print(f"  ✗ 未知放置区: {zone_name}")
+            return []
+        return [(obj, ZONES[zone_name].copy())]
+
+    elif mode == "absolute":
+        # 放到绝对坐标
+        obj = instruction["object"]
+        pos = np.array(instruction["position"], dtype=np.float64)
+        return [(obj, pos)]
+
+    elif mode == "relative":
+        # 放到另一个物体的相对位置
+        obj = instruction["object"]
+        ref = instruction["ref_object"]
+        relation = instruction.get("relation", "above")
+        offset_val = instruction.get("offset", 0.08)
+
+        # 查询参考物体的当前位置
+        ref_body_id = mujoco.mj_name2id(
+            mj_model, mujoco.mjtObj.mjOBJ_BODY, ref)
+        if ref_body_id < 0:
+            print(f"  ✗ 参考物体 {ref} 不存在")
+            return []
+        ref_pos = mj_data.xpos[ref_body_id].copy()
+
+        # 根据 relation 计算偏移
+        offset_map = {
+            "above":  np.array([0.0, 0.0, offset_val]),
+            "below":  np.array([0.0, 0.0, -offset_val]),
+            "left":   np.array([0.0, offset_val, 0.0]),
+            "right":  np.array([0.0, -offset_val, 0.0]),
+            "front":  np.array([offset_val, 0.0, 0.0]),
+            "behind": np.array([-offset_val, 0.0, 0.0]),
+        }
+        offset = offset_map.get(relation, np.array([0.0, 0.0, offset_val]))
+        target = ref_pos + offset
+        return [(obj, target)]
+
+    elif mode == "line":
+        # 多个物体排成一排
+        objects = instruction["objects"]
+        start = np.array(instruction["start"], dtype=np.float64)
+        end = np.array(instruction["end"], dtype=np.float64)
+        n = len(objects)
+        tasks = []
+        for i, obj in enumerate(objects):
+            t = i / max(n - 1, 1)   # 0 ~ 1 之间均匀分布
+            pos = start + t * (end - start)
+            tasks.append((obj, pos))
+        return tasks
+
+    else:
+        print(f"  ✗ 未知放置模式: {mode}")
+        return []
+
+
+def build_default_instructions(detections):
+    """
+    没有外部 LLM 指令时，使用默认分拣规则生成指令列表。
+    """
+    instructions = []
+    for _name, _conf, body_name, _pos in detections:
+        if body_name in DEFAULT_SORT_RULES:
+            instructions.append({
+                "object": body_name,
+                "mode": "zone",
+                "zone": DEFAULT_SORT_RULES[body_name],
+            })
+    return instructions
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -356,13 +479,16 @@ def check_grasp_success(model, data, body_name, renderer, cam_name):
     return lifted
 
 
-def execute_place(model, data, obj_name, renderer, cam_name="camera_front"):
+def execute_place(model, data, place_pos, renderer, cam_name="camera_front"):
     """
-    将已抓取的物体放到对应的分拣区域。
+    将已抓取的物体放到指定坐标。
     假设调用时物体已在夹爪中（刚执行完 execute_grasp 且验证成功）。
 
+    Args:
+        place_pos: np.array [x, y, z] — 放置目标坐标（由 resolve_place_target 计算）
+
     流程：
-      阶段 1 — 移动到放置区上方悬停
+      阶段 1 — 移动到目标上方悬停
       阶段 2 — 下降到放置高度
       阶段 3 — 松开夹爪
       阶段 4 — 抬起离开
@@ -371,12 +497,9 @@ def execute_place(model, data, obj_name, renderer, cam_name="camera_front"):
     Returns:
         success: bool
     """
-    zone_pos = PLACE_ZONES.get(obj_name)
-    if zone_pos is None:
-        print(f"  ✗ 未找到 {obj_name} 对应的放置区域")
-        return False
+    zone_pos = np.array(place_pos, dtype=np.float64)
 
-    print(f"\n  开始放置 {obj_name} → zone ({zone_pos[0]:.2f}, {zone_pos[1]:.2f})")
+    print(f"\n  放置目标 → ({zone_pos[0]:.3f}, {zone_pos[1]:.3f}, {zone_pos[2]:.3f})")
 
     # ── 阶段 1: 放置区上方悬停 ──
     hover_pos = zone_pos.copy()
@@ -443,10 +566,14 @@ def return_to_ready(model, data, renderer, cam_name):
 #  主程序
 # ═══════════════════════════════════════════════════════════════
 
-def pick_and_place_one(mj_model, mj_data, yolo, target_name, renderer, cam_name,
-                       do_place=True):
+def pick_and_place_one(mj_model, mj_data, yolo, target_name, place_pos,
+                       renderer, cam_name, do_place=True):
     """
     对单个物体执行完整的 抓取(+重试) → 放置 流程。
+
+    Args:
+        target_name: 要抓取的物体 body 名称
+        place_pos:   放置目标坐标 np.array [x,y,z]（由 resolve_place_target 计算）
 
     Returns:
         True 如果成功抓取（并放置）
@@ -464,10 +591,13 @@ def pick_and_place_one(mj_model, mj_data, yolo, target_name, renderer, cam_name,
             return False
 
         name, conf, body, pos = target
+        place_info = (f"→ ({place_pos[0]:.2f}, {place_pos[1]:.2f}, {place_pos[2]:.2f})"
+                      if do_place else "（仅抓取）")
         print(f"\n{'='*50}")
         print(f"  第 {attempt}/{MAX_GRASP_ATTEMPTS} 次尝试")
         print(f"  目标: {name}  置信度: {conf:.2f}")
-        print(f"  位置: ({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f})")
+        print(f"  当前位置: ({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f})")
+        print(f"  放置目标: {place_info}")
         print(f"{'='*50}\n")
 
         # 抓取
@@ -479,10 +609,10 @@ def pick_and_place_one(mj_model, mj_data, yolo, target_name, renderer, cam_name,
 
             # 放置
             if do_place:
-                place_ok = execute_place(mj_model, mj_data, body,
+                place_ok = execute_place(mj_model, mj_data, place_pos,
                                          renderer, cam_name)
                 if place_ok:
-                    print(f"✓ {name} 已放到分拣区")
+                    print(f"✓ {name} 已放置")
                 else:
                     print(f"✗ 放置失败，松手释放")
                     mj_data.ctrl[GRIPPER_IDX] = GRIPPER_OPEN
@@ -501,6 +631,8 @@ def pick_and_place_one(mj_model, mj_data, yolo, target_name, renderer, cam_name,
 
 
 def main():
+    import json
+
     parser = argparse.ArgumentParser(description="MuJoCo 智能分拣 Pipeline")
     parser.add_argument("--model", type=str, default=None,
                         help="YOLO 权重路径")
@@ -510,6 +642,8 @@ def main():
                         help="渲染相机 (camera_front / camera_top / camera_side)")
     parser.add_argument("--no-place", action="store_true",
                         help="只抓取不放置（调试用）")
+    parser.add_argument("--instructions", type=str, default=None,
+                        help="放置指令 JSON 文件路径（LLM 输出格式）")
     args = parser.parse_args()
 
     from ultralytics import YOLO
@@ -536,15 +670,13 @@ def main():
     mj_data = mujoco.MjData(mj_model)
     renderer = mujoco.Renderer(mj_model, height=480, width=640)
 
-    # 初始化：夹爪张开
+    # 初始化
     mj_data.ctrl[GRIPPER_IDX] = GRIPPER_OPEN
-
-    # 物理稳定（让物体落到桌面）
     print("场景初始化...")
     for _ in range(1000):
         mujoco.mj_step(mj_model, mj_data)
 
-    # ── 首次 YOLO 检测 ──
+    # ── YOLO 检测 ──
     print("\nYOLO 检测中...")
     detections, det_img = detect_objects(yolo, mj_model, mj_data, renderer)
 
@@ -555,10 +687,8 @@ def main():
 
     print(f"\n检测到 {len(detections)} 个物体:")
     for name, conf, body, pos in detections:
-        zone = PLACE_ZONES.get(body, None)
-        zone_str = f"→ zone ({zone[0]:.2f}, {zone[1]:.2f})" if zone is not None else "→ 无放置区"
         print(f"  {name:20s}  conf={conf:.2f}  "
-              f"pos=({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f})  {zone_str}")
+              f"pos=({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f})")
 
     cv2.imshow(WINDOW, det_img)
     print("\n按任意键开始分拣...")
@@ -566,21 +696,43 @@ def main():
 
     do_place = not args.no_place
 
-    # ── 构建任务列表 ──
-    if args.target:
-        task_names = [args.target]
+    # ── 构建放置指令 ──
+    if args.instructions:
+        # 从 JSON 文件加载（LLM 输出）
+        with open(args.instructions, "r") as f:
+            instructions = json.load(f)
+        print(f"\n加载外部指令: {args.instructions} ({len(instructions)} 条)")
+    elif args.target:
+        # 指定单个目标，用默认规则
+        instructions = [{"object": args.target, "mode": "zone",
+                         "zone": DEFAULT_SORT_RULES.get(args.target)}]
     else:
-        # 按置信度排序，逐个分拣
-        task_names = [d[2] for d in sorted(detections, key=lambda x: -x[1])]
+        # 默认：按分拣规则
+        instructions = build_default_instructions(detections)
+
+    # ── 解析指令 → 具体任务 ──
+    tasks = []  # [(object_name, place_pos), ...]
+    for inst in instructions:
+        resolved = resolve_place_target(inst, mj_model, mj_data)
+        tasks.extend(resolved)
+
+    if not tasks:
+        print("没有可执行的任务")
+        renderer.close()
+        return
+
+    print(f"\n任务计划 ({len(tasks)} 个):")
+    for obj, pos in tasks:
+        print(f"  {obj:20s} → ({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f})")
 
     # ── 逐个执行 抓取 → 放置 ──
     results = {}
-    for i, obj_name in enumerate(task_names):
+    for i, (obj_name, place_pos) in enumerate(tasks):
         print(f"\n{'#'*50}")
-        print(f"  分拣任务 [{i+1}/{len(task_names)}]: {obj_name}")
+        print(f"  任务 [{i+1}/{len(tasks)}]: {obj_name}")
         print(f"{'#'*50}")
 
-        ok = pick_and_place_one(mj_model, mj_data, yolo, obj_name,
+        ok = pick_and_place_one(mj_model, mj_data, yolo, obj_name, place_pos,
                                 renderer, args.camera, do_place=do_place)
         results[obj_name] = ok
 
@@ -592,9 +744,8 @@ def main():
         status = "✓ 成功" if ok else "✗ 失败"
         print(f"  {obj_name:20s}  {status}")
 
-    success = sum(results.values())
-    total = len(results)
-    print(f"\n  成功: {success}/{total}")
+    success_count = sum(results.values())
+    print(f"\n  成功: {success_count}/{len(results)}")
 
     print("\n按任意键退出...")
     cv2.waitKey(0)
