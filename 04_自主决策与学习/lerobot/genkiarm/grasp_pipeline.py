@@ -46,8 +46,15 @@ GRIPPER_IDX = 5                      # joint6 控制夹爪
 GRIPPER_OPEN = np.radians(90)        # 夹爪张开
 GRIPPER_CLOSE = np.radians(-5)       # 夹爪闭合
 PRE_GRASP_HEIGHT = 0.08              # 预抓取悬停高度（物体上方 8cm）
-GRASP_HEIGHT_OFFSET = 0.005          # 抓取时末端下探量
 LIFT_HEIGHT = 0.15                   # 抬起高度
+MAX_GRASP_ATTEMPTS = 3               # 最大重试次数
+GROUND_Z_THRESHOLD = 0.06            # 低于此高度视为仍在地面
+# TCP 偏移：从物体中心到实际 IK 目标点的修正 [dx, dy, dz]
+# 如果夹爪落点偏了，调这里：
+#   dx > 0 → 末端向 +X 移（远离臂基座方向）
+#   dy > 0 → 末端向 +Y 移（左右方向）
+#   dz > 0 → 末端抬高
+GRASP_OFFSET = np.array([0.02, -0.02, 0.02])
 READY_JOINTS = [0.0, -0.8, 0.5, 0.3, 0.0]  # 就绪姿态
 
 
@@ -273,8 +280,9 @@ def execute_grasp(model, data, target_pos, renderer, cam_name="camera_front"):
             stage="[1/5] Ready", steps=300)
 
     # ── 阶段 2: 预抓取悬停 ──
-    pre_grasp = target_pos.copy()
-    pre_grasp[2] += PRE_GRASP_HEIGHT
+    grasp_pos = target_pos + GRASP_OFFSET          # 加 TCP 偏移修正
+    pre_grasp = grasp_pos.copy()
+    pre_grasp[2] += PRE_GRASP_HEIGHT               # 再抬高悬停
 
     print(f"  [2/5] 预抓取悬停 → ({pre_grasp[0]:.3f}, {pre_grasp[1]:.3f}, {pre_grasp[2]:.3f})")
     angles, ok = solve_ik(model, pre_grasp, data.qpos.copy())
@@ -285,9 +293,6 @@ def execute_grasp(model, data, target_pos, renderer, cam_name="camera_front"):
             stage="[2/5] Pre-grasp", steps=500)
 
     # ── 阶段 3: 下降 ──
-    grasp_pos = target_pos.copy()
-    grasp_pos[2] += GRASP_HEIGHT_OFFSET
-
     print(f"  [3/5] 下降 → ({grasp_pos[0]:.3f}, {grasp_pos[1]:.3f}, {grasp_pos[2]:.3f})")
     angles, ok = solve_ik(model, grasp_pos, data.qpos.copy())
     if not ok:
@@ -304,7 +309,7 @@ def execute_grasp(model, data, target_pos, renderer, cam_name="camera_front"):
             stage="[4/5] Grasping", steps=300)
 
     # ── 阶段 5: 抬起 ──
-    lift_pos = target_pos.copy()
+    lift_pos = grasp_pos.copy()
     lift_pos[2] += LIFT_HEIGHT
 
     print(f"  [5/5] 抬起 → ({lift_pos[0]:.3f}, {lift_pos[1]:.3f}, {lift_pos[2]:.3f})")
@@ -318,6 +323,33 @@ def execute_grasp(model, data, target_pos, renderer, cam_name="camera_front"):
     # 最终展示
     render_frame(model, data, renderer, cam_name, stage="Done!")
     return True
+
+
+def check_grasp_success(model, data, body_name, renderer, cam_name):
+    """
+    验证抓取是否成功：检查目标物体是否已离开地面。
+    如果物体 z 坐标高于阈值，说明被抬起来了。
+    """
+    mujoco.mj_forward(model, data)
+    body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+    obj_z = data.xpos[body_id][2]
+    lifted = obj_z > GROUND_Z_THRESHOLD
+
+    status = f"物体高度: {obj_z:.3f}m — {'已抬起' if lifted else '仍在地面'}"
+    print(f"  验证: {status}")
+    render_frame(model, data, renderer, cam_name,
+                 stage="OK" if lifted else "MISS", extra_text=status)
+    return lifted
+
+
+def return_to_ready(model, data, renderer, cam_name):
+    """回到就绪位置并张开夹爪，准备重试。"""
+    data.ctrl[GRIPPER_IDX] = GRIPPER_OPEN
+    move_to(model, data, READY_JOINTS, renderer, cam_name,
+            stage="Retry - Ready", steps=400)
+    # 等物体落稳
+    for _ in range(500):
+        mujoco.mj_step(model, data)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -366,7 +398,7 @@ def main():
     for _ in range(1000):
         mujoco.mj_step(mj_model, mj_data)
 
-    # ── YOLO 检测 ──
+    # ── 首次 YOLO 检测 ──
     print("\nYOLO 检测中...")
     detections, det_img = detect_objects(yolo, mj_model, mj_data, renderer)
 
@@ -380,43 +412,69 @@ def main():
         print(f"  {name:20s}  conf={conf:.2f}  "
               f"pos=({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f})")
 
-    # 显示检测结果
     cv2.imshow(WINDOW, det_img)
     print("\n按任意键开始抓取...")
     cv2.waitKey(0)
 
     # ── 选择目标 ──
-    if args.target:
+    target_name = args.target
+    if target_name:
         target = None
         for d in detections:
-            if d[0] == args.target or d[2] == args.target:
+            if d[0] == target_name or d[2] == target_name:
                 target = d
                 break
         if target is None:
-            print(f"未检测到指定目标: {args.target}")
+            print(f"未检测到指定目标: {target_name}")
             renderer.close()
             return
     else:
-        # 选置信度最高的
         target = max(detections, key=lambda x: x[1])
+        target_name = target[2]  # body_name
 
-    name, conf, body, pos = target
-    print(f"\n{'='*50}")
-    print(f"  目标: {name}")
-    print(f"  置信度: {conf:.2f}")
-    print(f"  位置: ({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f})")
-    print(f"{'='*50}")
+    # ── 抓取 + 验证 + 重试循环 ──
+    for attempt in range(1, MAX_GRASP_ATTEMPTS + 1):
+        name, conf, body, pos = target
 
-    # ── 执行抓取 ──
-    print("\n开始抓取序列...\n")
-    success = execute_grasp(mj_model, mj_data, pos, renderer, args.camera)
+        print(f"\n{'='*50}")
+        print(f"  第 {attempt}/{MAX_GRASP_ATTEMPTS} 次尝试")
+        print(f"  目标: {name}  置信度: {conf:.2f}")
+        print(f"  位置: ({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f})")
+        print(f"{'='*50}\n")
 
-    if success:
-        print("\n✓ 抓取完成!")
-    else:
-        print("\n✗ 抓取失败")
+        # 执行抓取
+        grasp_ok = execute_grasp(mj_model, mj_data, pos, renderer, args.camera)
 
-    print("按任意键退出...")
+        if not grasp_ok:
+            print(f"\n  第 {attempt} 次: 抓取动作失败（IK 不可达）")
+        else:
+            # 验证：物体是否被抬起
+            if check_grasp_success(mj_model, mj_data, body,
+                                   renderer, args.camera):
+                print(f"\n✓ 第 {attempt} 次尝试成功!")
+                break
+
+            print(f"\n  第 {attempt} 次: 物体未抓住")
+
+        # 还有重试机会 → 回到就绪位，重新检测
+        if attempt < MAX_GRASP_ATTEMPTS:
+            print("\n  回到就绪位，重新检测...")
+            return_to_ready(mj_model, mj_data, renderer, args.camera)
+
+            # 重新检测，获取最新位置（物体可能被碰移位了）
+            detections, _ = detect_objects(yolo, mj_model, mj_data, renderer)
+            target = None
+            for d in detections:
+                if d[2] == target_name:
+                    target = d
+                    break
+            if target is None:
+                print(f"  重新检测未找到 {target_name}，终止")
+                break
+        else:
+            print(f"\n✗ {MAX_GRASP_ATTEMPTS} 次尝试均失败")
+
+    print("\n按任意键退出...")
     cv2.waitKey(0)
     cv2.destroyAllWindows()
     renderer.close()
