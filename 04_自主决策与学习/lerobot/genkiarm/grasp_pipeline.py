@@ -1,17 +1,20 @@
 """
-MuJoCo 抓取控制 Pipeline
+MuJoCo 智能分拣 Pipeline
 ========================
-YOLO 检测 → 目标定位 → IK 求解 → 分阶段抓取
+YOLO 检测 → 目标定位 → IK 求解 → 抓取 → 放置到对应区域
 
 流程：
-  1. 渲染场景 → YOLO 检测目标物体
+  1. 渲染场景 → YOLO 检测所有物体
   2. 获取目标 3D 位置（仿真中直接读取 body position）
   3. IK 求解：Jacobian 迭代法（使用 MuJoCo 内置 mj_jacSite）
-  4. 分阶段执行：就绪 → 预抓取悬停 → 下降 → 闭合夹爪 → 抬起
+  4. 抓取：就绪 → 预抓取悬停 → 下降 → 闭合夹爪 → 抬起
+  5. 放置：移动到对应分拣区上方 → 下降 → 松开夹爪 → 抬起
+  6. 循环处理所有检测到的物体
 
 用法：
-  python grasp_pipeline.py --model runs/detect/train/weights/best.pt
-  python grasp_pipeline.py --model best.pt --target blue_cube
+  python grasp_pipeline.py                              # 分拣所有物体
+  python grasp_pipeline.py --target blue_cube           # 只分拣指定物体
+  python grasp_pipeline.py --model best.pt --no-place   # 只抓不放
 """
 
 import argparse
@@ -55,7 +58,18 @@ GROUND_Z_THRESHOLD = 0.06            # 低于此高度视为仍在地面
 #   dy > 0 → 末端向 +Y 移（左右方向）
 #   dz > 0 → 末端抬高
 GRASP_OFFSET = np.array([0.02, -0.02, 0.02])
+PLACE_HEIGHT = 0.08                  # 放置时松手的高度
+PLACE_HOVER_HEIGHT = 0.15            # 放置区上方悬停高度
 READY_JOINTS = [0.0, -0.8, 0.5, 0.3, 0.0]  # 就绪姿态
+
+# ─── 物体 → 放置区映射 ───
+# 每种物体对应一个分拣目标区域的中心坐标
+PLACE_ZONES = {
+    "red_cylinder":    np.array([-0.15, -0.35, 0.0]),   # zone_red
+    "blue_cube":       np.array([-0.15,  0.35, 0.0]),   # zone_blue
+    "green_sphere":    np.array([-0.50,  0.00, 0.0]),   # zone_green
+    "yellow_cylinder": np.array([-0.15,  0.00, 0.0]),   # zone_yellow
+}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -342,6 +356,79 @@ def check_grasp_success(model, data, body_name, renderer, cam_name):
     return lifted
 
 
+def execute_place(model, data, obj_name, renderer, cam_name="camera_front"):
+    """
+    将已抓取的物体放到对应的分拣区域。
+    假设调用时物体已在夹爪中（刚执行完 execute_grasp 且验证成功）。
+
+    流程：
+      阶段 1 — 移动到放置区上方悬停
+      阶段 2 — 下降到放置高度
+      阶段 3 — 松开夹爪
+      阶段 4 — 抬起离开
+      阶段 5 — 回到就绪位
+
+    Returns:
+        success: bool
+    """
+    zone_pos = PLACE_ZONES.get(obj_name)
+    if zone_pos is None:
+        print(f"  ✗ 未找到 {obj_name} 对应的放置区域")
+        return False
+
+    print(f"\n  开始放置 {obj_name} → zone ({zone_pos[0]:.2f}, {zone_pos[1]:.2f})")
+
+    # ── 阶段 1: 放置区上方悬停 ──
+    hover_pos = zone_pos.copy()
+    hover_pos[2] += PLACE_HOVER_HEIGHT
+
+    print(f"  [放置 1/5] 悬停 → ({hover_pos[0]:.3f}, {hover_pos[1]:.3f}, {hover_pos[2]:.3f})")
+    angles, ok = solve_ik(model, hover_pos, data.qpos.copy())
+    if not ok:
+        print("  ✗ IK 求解失败（放置区悬停不可达）")
+        return False
+    move_to(model, data, angles, renderer, cam_name,
+            stage="[Place 1/5] Hover", steps=500)
+
+    # ── 阶段 2: 下降到放置高度 ──
+    place_pos = zone_pos.copy()
+    place_pos[2] += PLACE_HEIGHT
+
+    print(f"  [放置 2/5] 下降 → ({place_pos[0]:.3f}, {place_pos[1]:.3f}, {place_pos[2]:.3f})")
+    angles, ok = solve_ik(model, place_pos, data.qpos.copy())
+    if not ok:
+        print("  ✗ IK 求解失败（放置位置不可达）")
+        return False
+    move_to(model, data, angles, renderer, cam_name,
+            stage="[Place 2/5] Descend", steps=400)
+
+    # ── 阶段 3: 松开夹爪 ──
+    print("  [放置 3/5] 松开夹爪")
+    data.ctrl[GRIPPER_IDX] = GRIPPER_OPEN
+    move_to(model, data, data.ctrl[:N_ARM_JOINTS].copy(), renderer, cam_name,
+            stage="[Place 3/5] Release", steps=300)
+
+    # ── 阶段 4: 抬起离开 ──
+    retreat_pos = place_pos.copy()
+    retreat_pos[2] += PLACE_HOVER_HEIGHT
+
+    print(f"  [放置 4/5] 抬起 → ({retreat_pos[0]:.3f}, {retreat_pos[1]:.3f}, {retreat_pos[2]:.3f})")
+    angles, ok = solve_ik(model, retreat_pos, data.qpos.copy())
+    if not ok:
+        print("  ✗ IK 求解失败（抬起不可达）")
+        return False
+    move_to(model, data, angles, renderer, cam_name,
+            stage="[Place 4/5] Retreat", steps=400)
+
+    # ── 阶段 5: 回到就绪位 ──
+    print("  [放置 5/5] 回到就绪位")
+    move_to(model, data, READY_JOINTS, renderer, cam_name,
+            stage="[Place 5/5] Ready", steps=300)
+
+    render_frame(model, data, renderer, cam_name, stage="Placed!")
+    return True
+
+
 def return_to_ready(model, data, renderer, cam_name):
     """回到就绪位置并张开夹爪，准备重试。"""
     data.ctrl[GRIPPER_IDX] = GRIPPER_OPEN
@@ -356,14 +443,73 @@ def return_to_ready(model, data, renderer, cam_name):
 #  主程序
 # ═══════════════════════════════════════════════════════════════
 
+def pick_and_place_one(mj_model, mj_data, yolo, target_name, renderer, cam_name,
+                       do_place=True):
+    """
+    对单个物体执行完整的 抓取(+重试) → 放置 流程。
+
+    Returns:
+        True 如果成功抓取（并放置）
+    """
+    for attempt in range(1, MAX_GRASP_ATTEMPTS + 1):
+        # 每次重试前重新检测，拿到最新位置
+        detections, _ = detect_objects(yolo, mj_model, mj_data, renderer)
+        target = None
+        for d in detections:
+            if d[2] == target_name:
+                target = d
+                break
+        if target is None:
+            print(f"  检测不到 {target_name}，跳过")
+            return False
+
+        name, conf, body, pos = target
+        print(f"\n{'='*50}")
+        print(f"  第 {attempt}/{MAX_GRASP_ATTEMPTS} 次尝试")
+        print(f"  目标: {name}  置信度: {conf:.2f}")
+        print(f"  位置: ({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f})")
+        print(f"{'='*50}\n")
+
+        # 抓取
+        grasp_ok = execute_grasp(mj_model, mj_data, pos, renderer, cam_name)
+
+        if grasp_ok and check_grasp_success(mj_model, mj_data, body,
+                                            renderer, cam_name):
+            print(f"\n✓ 抓取成功!")
+
+            # 放置
+            if do_place:
+                place_ok = execute_place(mj_model, mj_data, body,
+                                         renderer, cam_name)
+                if place_ok:
+                    print(f"✓ {name} 已放到分拣区")
+                else:
+                    print(f"✗ 放置失败，松手释放")
+                    mj_data.ctrl[GRIPPER_IDX] = GRIPPER_OPEN
+                    move_to(mj_model, mj_data, READY_JOINTS, renderer,
+                            cam_name, stage="Release", steps=300)
+            return True
+
+        # 抓取失败，回到就绪位重试
+        print(f"\n  第 {attempt} 次失败")
+        if attempt < MAX_GRASP_ATTEMPTS:
+            print("  回到就绪位，重新检测...")
+            return_to_ready(mj_model, mj_data, renderer, cam_name)
+
+    print(f"\n✗ {target_name}: {MAX_GRASP_ATTEMPTS} 次均失败")
+    return False
+
+
 def main():
-    parser = argparse.ArgumentParser(description="MuJoCo 抓取控制 Pipeline")
+    parser = argparse.ArgumentParser(description="MuJoCo 智能分拣 Pipeline")
     parser.add_argument("--model", type=str, default=None,
                         help="YOLO 权重路径")
     parser.add_argument("--target", type=str, default=None,
-                        help="指定目标 (如 blue_cube)，不指定则抓置信度最高的")
+                        help="指定目标 (如 blue_cube)，不指定则分拣所有物体")
     parser.add_argument("--camera", type=str, default="camera_front",
                         help="渲染相机 (camera_front / camera_top / camera_side)")
+    parser.add_argument("--no-place", action="store_true",
+                        help="只抓取不放置（调试用）")
     args = parser.parse_args()
 
     from ultralytics import YOLO
@@ -409,70 +555,46 @@ def main():
 
     print(f"\n检测到 {len(detections)} 个物体:")
     for name, conf, body, pos in detections:
+        zone = PLACE_ZONES.get(body, None)
+        zone_str = f"→ zone ({zone[0]:.2f}, {zone[1]:.2f})" if zone is not None else "→ 无放置区"
         print(f"  {name:20s}  conf={conf:.2f}  "
-              f"pos=({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f})")
+              f"pos=({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f})  {zone_str}")
 
     cv2.imshow(WINDOW, det_img)
-    print("\n按任意键开始抓取...")
+    print("\n按任意键开始分拣...")
     cv2.waitKey(0)
 
-    # ── 选择目标 ──
-    target_name = args.target
-    if target_name:
-        target = None
-        for d in detections:
-            if d[0] == target_name or d[2] == target_name:
-                target = d
-                break
-        if target is None:
-            print(f"未检测到指定目标: {target_name}")
-            renderer.close()
-            return
+    do_place = not args.no_place
+
+    # ── 构建任务列表 ──
+    if args.target:
+        task_names = [args.target]
     else:
-        target = max(detections, key=lambda x: x[1])
-        target_name = target[2]  # body_name
+        # 按置信度排序，逐个分拣
+        task_names = [d[2] for d in sorted(detections, key=lambda x: -x[1])]
 
-    # ── 抓取 + 验证 + 重试循环 ──
-    for attempt in range(1, MAX_GRASP_ATTEMPTS + 1):
-        name, conf, body, pos = target
+    # ── 逐个执行 抓取 → 放置 ──
+    results = {}
+    for i, obj_name in enumerate(task_names):
+        print(f"\n{'#'*50}")
+        print(f"  分拣任务 [{i+1}/{len(task_names)}]: {obj_name}")
+        print(f"{'#'*50}")
 
-        print(f"\n{'='*50}")
-        print(f"  第 {attempt}/{MAX_GRASP_ATTEMPTS} 次尝试")
-        print(f"  目标: {name}  置信度: {conf:.2f}")
-        print(f"  位置: ({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f})")
-        print(f"{'='*50}\n")
+        ok = pick_and_place_one(mj_model, mj_data, yolo, obj_name,
+                                renderer, args.camera, do_place=do_place)
+        results[obj_name] = ok
 
-        # 执行抓取
-        grasp_ok = execute_grasp(mj_model, mj_data, pos, renderer, args.camera)
+    # ── 汇总 ──
+    print(f"\n{'='*50}")
+    print("  分拣结果汇总")
+    print(f"{'='*50}")
+    for obj_name, ok in results.items():
+        status = "✓ 成功" if ok else "✗ 失败"
+        print(f"  {obj_name:20s}  {status}")
 
-        if not grasp_ok:
-            print(f"\n  第 {attempt} 次: 抓取动作失败（IK 不可达）")
-        else:
-            # 验证：物体是否被抬起
-            if check_grasp_success(mj_model, mj_data, body,
-                                   renderer, args.camera):
-                print(f"\n✓ 第 {attempt} 次尝试成功!")
-                break
-
-            print(f"\n  第 {attempt} 次: 物体未抓住")
-
-        # 还有重试机会 → 回到就绪位，重新检测
-        if attempt < MAX_GRASP_ATTEMPTS:
-            print("\n  回到就绪位，重新检测...")
-            return_to_ready(mj_model, mj_data, renderer, args.camera)
-
-            # 重新检测，获取最新位置（物体可能被碰移位了）
-            detections, _ = detect_objects(yolo, mj_model, mj_data, renderer)
-            target = None
-            for d in detections:
-                if d[2] == target_name:
-                    target = d
-                    break
-            if target is None:
-                print(f"  重新检测未找到 {target_name}，终止")
-                break
-        else:
-            print(f"\n✗ {MAX_GRASP_ATTEMPTS} 次尝试均失败")
+    success = sum(results.values())
+    total = len(results)
+    print(f"\n  成功: {success}/{total}")
 
     print("\n按任意键退出...")
     cv2.waitKey(0)
