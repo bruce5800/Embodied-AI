@@ -1,12 +1,10 @@
 """Phase-gated dense reward。
 
 把 episode 自动切成两段：
-  - 未抓起（held = False）：奖励"靠近 → 接触 → 抬起"
+  - 未抓起（held = False）：奖励"靠近 → 闭爪 → 接触 → 抬起"
   - 已抓起（held = True） ：奖励"运送到目标区"
 
-held 判定 = 触觉传感器有信号 AND 夹爪在闭合 AND 物体已离地。
-
-返回 (reward, terminated, truncated_oob, info)，由 GraspEnv.step 决定怎么用。
+held 判定 = 几何接触 AND 夹爪在闭合 AND 物体已离地。
 """
 
 from dataclasses import dataclass
@@ -18,13 +16,15 @@ from .scene_constants import (
     LIFT_THRESHOLD, LIFT_TARGET_Z,
     SUCCESS_RADIUS, PLACED_Z_MAX,
     OBJ_OOB_LOW, OBJ_OOB_HIGH,
+    NEAR_GRIP_RADIUS,
 )
 
 
-# ─── 各项奖励权重（把魔数集中在此） ───
+# ─── 各项奖励权重 ───
 W_ACTION_PENALTY = 0.001       # -‖a‖²
 W_STEP_PENALTY = 0.01          # 每步小惩罚
-W_TOUCH_BONUS = 0.5            # 触到物体瞬时奖励
+W_TOUCH_BONUS = 1.0            # 触到物体瞬时奖励（从 0.5 提到 1.0）
+W_NEAR_GRIP_BONUS = 0.5        # 靠近物体时闭爪 bonus（新增）
 W_LIFT_LINEAR = 2.0            # max(0, z - LIFT_THRESHOLD) 系数
 W_HELD_BASELINE = 1.0          # 已抓起的基础保持奖励
 W_OVERLIFT = 0.5               # 抬太高的扣分系数
@@ -38,6 +38,7 @@ class RewardBreakdown:
     step_penalty: float
     reach: float
     touch_bonus: float
+    near_grip_bonus: float
     lift_linear: float
     held_baseline: float
     transport: float
@@ -55,7 +56,7 @@ def compute_reward(
     site_ee_id: int,
     target_body_id: int,
     target_zone_pos: np.ndarray,
-    touch_sensor_adr: int,
+    has_contact: bool,
     action: np.ndarray,
 ):
     """
@@ -66,13 +67,13 @@ def compute_reward(
         site_ee_id:         end_effector site id
         target_body_id:     当前 episode 的目标物体 body id
         target_zone_pos:    目标区中心 xyz
-        touch_sensor_adr:   sensordata 中 gripper_touch 的索引
+        has_contact:        gripper geom 是否接触 obj geom（env 用 mj_contact 算）
         action:             RL 动作（4-dim, 已裁剪到 [-1, 1]）
 
     Returns:
         reward (float)
         terminated (bool)         placed 成功
-        truncated_oob (bool)      物体被推飞 ⇒ 由 env 决定要不要 truncate
+        truncated_oob (bool)      物体被推飞 ⇒ env 决定要不要 truncate
         info (dict)               调试信息
     """
     ee_pos = data.site_xpos[site_ee_id]
@@ -80,11 +81,9 @@ def compute_reward(
     target_pos = target_zone_pos
 
     obj_z = float(obj_pos[2])
-    touch = float(data.sensordata[touch_sensor_adr])
     gripper_q = float(data.qpos[GRIPPER_IDX])
 
     # ── 状态判定 ──
-    has_contact = touch > 0.0
     is_closing = gripper_q < HELD_GRIP_THRESHOLD
     is_lifted = obj_z > LIFT_THRESHOLD
     held = has_contact and is_closing and is_lifted
@@ -92,6 +91,7 @@ def compute_reward(
     # ── 距离指标 ──
     d_ee_obj = float(np.linalg.norm(obj_pos - ee_pos))
     d_obj_tgt_xy = float(np.linalg.norm(obj_pos[:2] - target_pos[:2]))
+    near_obj = d_ee_obj < NEAR_GRIP_RADIUS
 
     # ── 终止 / OOB 判定 ──
     placed = (d_obj_tgt_xy < SUCCESS_RADIUS) and (obj_z < PLACED_Z_MAX)
@@ -107,15 +107,17 @@ def compute_reward(
     # ── 分阶段项 ──
     reach = 0.0
     touch_bonus = 0.0
+    near_grip_bonus = 0.0
     lift_linear = 0.0
     held_baseline = 0.0
     transport = 0.0
     overlift_penalty = 0.0
 
     if not held:
-        # 阶段 A：接近 → 接触 → 抬起
+        # 阶段 A：接近 → 闭爪 → 接触 → 抬起
         reach = -d_ee_obj
         touch_bonus = W_TOUCH_BONUS if has_contact else 0.0
+        near_grip_bonus = W_NEAR_GRIP_BONUS if (near_obj and is_closing) else 0.0
         lift_linear = W_LIFT_LINEAR * max(0.0, obj_z - LIFT_THRESHOLD)
     else:
         # 阶段 B：保持抓握并运送到目标区
@@ -126,7 +128,7 @@ def compute_reward(
     placed_bonus = R_PLACED_BONUS if placed else 0.0
 
     total = (action_penalty + step_penalty
-             + reach + touch_bonus + lift_linear
+             + reach + touch_bonus + near_grip_bonus + lift_linear
              + held_baseline + transport + overlift_penalty
              + placed_bonus)
 
@@ -135,6 +137,7 @@ def compute_reward(
         step_penalty=step_penalty,
         reach=reach,
         touch_bonus=touch_bonus,
+        near_grip_bonus=near_grip_bonus,
         lift_linear=lift_linear,
         held_baseline=held_baseline,
         transport=transport,
@@ -153,7 +156,7 @@ def compute_reward(
         "d_ee_obj": d_ee_obj,
         "d_obj_tgt": d_obj_tgt_xy,
         "obj_z": obj_z,
-        "touch": touch,
+        "near_obj": near_obj,
         "reward_breakdown": breakdown.to_dict(),
     }
 

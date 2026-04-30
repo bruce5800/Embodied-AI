@@ -35,10 +35,6 @@ READY_JOINTS = np.array([0.0, -0.8, 0.5, 0.3, 0.0])
 READY_PERTURB_STD = 0.05
 
 
-# ─── 触觉传感器（test4.xml 中已定义）───
-TOUCH_SENSOR_NAME = "gripper_touch"
-
-
 # ─── 待操作物体 ───
 OBJECTS = [
     {"name": "red_cylinder",    "class_id": 0},
@@ -80,8 +76,19 @@ RANDOM_Y_RANGE = (-0.25, 0.25)
 
 # ─── Episode 设置 ───
 MAX_EPISODE_STEPS = 250
-SUBSTEPS_PER_ACTION = 5            # 每个 RL step 跑几次 mj_step
-EE_DELTA_MAX = 0.02                # 单步末端最大位移（米）
+SUBSTEPS_PER_ACTION = 20           # 每个 RL step 跑几次 mj_step（40ms 物理时间）
+JOINT_DELTA_MAX = 0.05             # 单步关节最大增量（弧度）≈ 2.9°
+
+
+# ─── 控制器调参 ───
+# 04 stage XML 的 actuator kp 偏软（PD 扛不住重力 + arm 自身惯量）
+# 加载模型后给 joint1-5 的 kp 乘 KP_BOOST。诊断显示 ×2 还不够（关节误差 0.57 rad）
+KP_BOOST = 3.0
+
+
+# ─── Near-grip 区域（dense reward 用） ───
+# 当 d_ee_obj < 此值 AND 夹爪闭合中时，给 bonus，引导 agent "靠近时闭爪"
+NEAR_GRIP_RADIUS = 0.05
 
 
 # ─── 物体出界检测（被推飞 ⇒ 提前截断） ───

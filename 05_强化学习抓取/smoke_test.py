@@ -45,7 +45,7 @@ def main():
     # 形状/类型断言
     assert obs.shape == (28,), f"obs shape: {obs.shape}"
     assert obs.dtype == np.float32
-    assert env.action_space.shape == (4,)
+    assert env.action_space.shape == (6,)
     print("─" * 60)
     print("OK")
 
