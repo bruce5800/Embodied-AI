@@ -1,0 +1,32 @@
+# SAC 默认超参（manipulation baseline，先信任默认值，把精力放在 env/reward）
+policy: MlpPolicy
+policy_kwargs:
+  net_arch: [256, 256]
+
+# 优化
+learning_rate: 3.0e-4
+batch_size: 256
+
+# Replay buffer
+buffer_size: 1_000_000
+learning_starts: 10_000           # 前 10k 步纯随机，填 buffer
+
+# SAC 特有
+tau: 0.005                        # target network soft update
+gamma: 0.99
+ent_coef: auto                    # 自动熵调节
+target_entropy: auto
+
+# 训练频率
+gradient_steps: 1
+train_freq: 1                     # 每 env step 训一次
+
+# 总步数（M1: 单物体 baseline）
+total_timesteps: 500_000
+
+# 评估
+eval_freq: 10_000                 # 每 10k step eval 一次
+n_eval_episodes: 20
+
+# 检查点
+checkpoint_freq: 50_000

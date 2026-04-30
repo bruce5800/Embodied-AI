@@ -8,3 +8,8 @@ node_modules/
 # YOLO 训练数据（可通过 vision_pipeline.py generate 重新生成）
 dataset/
 runs/
+
+# RL 训练产物（05_强化学习抓取）
+05_强化学习抓取/logs/
+05_强化学习抓取/checkpoints/
+05_强化学习抓取/eval_renders/

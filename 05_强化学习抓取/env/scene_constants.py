@@ -25,10 +25,18 @@ GRIPPER_IDX = 5       # joint6 控制夹爪
 # ─── 夹爪命令范围（弧度） ───
 GRIPPER_OPEN = np.radians(90)
 GRIPPER_CLOSE = np.radians(-30)
+# 夹爪角度小于此值视为"正在闭合/已闭合"（用于判定 held 状态）
+HELD_GRIP_THRESHOLD = np.radians(30)
 
 
 # ─── 默认就绪姿态 ───
 READY_JOINTS = np.array([0.0, -0.8, 0.5, 0.3, 0.0])
+# Reset 时给就绪姿态加的高斯扰动 std
+READY_PERTURB_STD = 0.05
+
+
+# ─── 触觉传感器（test4.xml 中已定义）───
+TOUCH_SENSOR_NAME = "gripper_touch"
 
 
 # ─── 待操作物体 ───
@@ -60,7 +68,8 @@ DEFAULT_SORT_RULES = {
 
 
 # ─── EE 工作空间边界（用于裁剪 RL 动作的目标位置） ───
-EE_BOUNDS_LOW  = np.array([-0.60, -0.40, 0.00])
+# z_min 抬到 0.01 避免命令钻进桌面
+EE_BOUNDS_LOW  = np.array([-0.60, -0.40, 0.01])
 EE_BOUNDS_HIGH = np.array([-0.05,  0.40, 0.40])
 
 
@@ -69,7 +78,19 @@ RANDOM_X_RANGE = (-0.45, -0.15)
 RANDOM_Y_RANGE = (-0.25, 0.25)
 
 
+# ─── Episode 设置 ───
+MAX_EPISODE_STEPS = 250
+SUBSTEPS_PER_ACTION = 5            # 每个 RL step 跑几次 mj_step
+EE_DELTA_MAX = 0.02                # 单步末端最大位移（米）
+
+
+# ─── 物体出界检测（被推飞 ⇒ 提前截断） ───
+OBJ_OOB_LOW = np.array([-0.70, -0.50])   # x, y
+OBJ_OOB_HIGH = np.array([0.10, 0.50])
+
+
 # ─── Reward / 终止判定阈值 ───
 LIFT_THRESHOLD = 0.06     # 物体 z > 此值 = 已抬起
+LIFT_TARGET_Z = 0.20      # 抬到此值就够了，再高反而扣分
 SUCCESS_RADIUS = 0.06     # 物体 xy 距目标 < 此值 = 放置成功
 PLACED_Z_MAX = 0.05       # 物体 z < 此值 = 已落到地面（与 success 共同判定）

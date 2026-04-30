@@ -43,7 +43,7 @@ def main():
     print(f"object_lifted      : {info['object_lifted']}")
 
     # 形状/类型断言
-    assert obs.shape == (26,), f"obs shape: {obs.shape}"
+    assert obs.shape == (28,), f"obs shape: {obs.shape}"
     assert obs.dtype == np.float32
     assert env.action_space.shape == (4,)
     print("─" * 60)
