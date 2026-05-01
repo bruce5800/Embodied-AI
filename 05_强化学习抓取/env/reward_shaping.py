@@ -21,14 +21,16 @@ from .scene_constants import (
 
 
 # ─── 各项奖励权重 ───
+# v2 改动：去掉 touch_bonus / near_grip_bonus（500k 训练显示 agent 用它们刷分
+# 不真正抓起；正 reward + 0% success = 经典 reward gaming）。
+# 新设计：phase A 只给 reach + lift（连续梯度），phase B 给明显更高的 baseline，
+# 让 phase B 平均 reward ≫ phase A，agent 才有动力真抓起来。
 W_ACTION_PENALTY = 0.001       # -‖a‖²
 W_STEP_PENALTY = 0.01          # 每步小惩罚
-W_TOUCH_BONUS = 1.0            # 触到物体瞬时奖励（从 0.5 提到 1.0）
-W_NEAR_GRIP_BONUS = 0.5        # 靠近物体时闭爪 bonus（新增）
-W_LIFT_LINEAR = 2.0            # max(0, z - LIFT_THRESHOLD) 系数
-W_HELD_BASELINE = 1.0          # 已抓起的基础保持奖励
+W_LIFT_LINEAR = 5.0            # 抬起斜率（2 → 5：让 lift 变得显著有吸引力）
+W_HELD_BASELINE = 3.0          # phase B 基础（1 → 3：远高于 phase A 平均）
 W_OVERLIFT = 0.5               # 抬太高的扣分系数
-R_PLACED_BONUS = 20.0          # 终止 bonus
+R_PLACED_BONUS = 50.0          # 终止 bonus（20 → 50）
 
 
 @dataclass
@@ -37,8 +39,6 @@ class RewardBreakdown:
     action_penalty: float
     step_penalty: float
     reach: float
-    touch_bonus: float
-    near_grip_bonus: float
     lift_linear: float
     held_baseline: float
     transport: float
@@ -91,7 +91,6 @@ def compute_reward(
     # ── 距离指标 ──
     d_ee_obj = float(np.linalg.norm(obj_pos - ee_pos))
     d_obj_tgt_xy = float(np.linalg.norm(obj_pos[:2] - target_pos[:2]))
-    near_obj = d_ee_obj < NEAR_GRIP_RADIUS
 
     # ── 终止 / OOB 判定 ──
     placed = (d_obj_tgt_xy < SUCCESS_RADIUS) and (obj_z < PLACED_Z_MAX)
@@ -106,21 +105,17 @@ def compute_reward(
 
     # ── 分阶段项 ──
     reach = 0.0
-    touch_bonus = 0.0
-    near_grip_bonus = 0.0
     lift_linear = 0.0
     held_baseline = 0.0
     transport = 0.0
     overlift_penalty = 0.0
 
     if not held:
-        # 阶段 A：接近 → 闭爪 → 接触 → 抬起
+        # 阶段 A：接近 + 抬起（移除了 touch/near_grip 重复 bonus）
         reach = -d_ee_obj
-        touch_bonus = W_TOUCH_BONUS if has_contact else 0.0
-        near_grip_bonus = W_NEAR_GRIP_BONUS if (near_obj and is_closing) else 0.0
         lift_linear = W_LIFT_LINEAR * max(0.0, obj_z - LIFT_THRESHOLD)
     else:
-        # 阶段 B：保持抓握并运送到目标区
+        # 阶段 B：保持抓握并运送到目标区。baseline 高，明显优于 phase A
         held_baseline = W_HELD_BASELINE
         transport = -d_obj_tgt_xy
         overlift_penalty = -W_OVERLIFT * max(0.0, obj_z - LIFT_TARGET_Z)
@@ -128,7 +123,7 @@ def compute_reward(
     placed_bonus = R_PLACED_BONUS if placed else 0.0
 
     total = (action_penalty + step_penalty
-             + reach + touch_bonus + near_grip_bonus + lift_linear
+             + reach + lift_linear
              + held_baseline + transport + overlift_penalty
              + placed_bonus)
 
@@ -136,8 +131,6 @@ def compute_reward(
         action_penalty=action_penalty,
         step_penalty=step_penalty,
         reach=reach,
-        touch_bonus=touch_bonus,
-        near_grip_bonus=near_grip_bonus,
         lift_linear=lift_linear,
         held_baseline=held_baseline,
         transport=transport,
@@ -156,7 +149,6 @@ def compute_reward(
         "d_ee_obj": d_ee_obj,
         "d_obj_tgt": d_obj_tgt_xy,
         "obj_z": obj_z,
-        "near_obj": near_obj,
         "reward_breakdown": breakdown.to_dict(),
     }
 
