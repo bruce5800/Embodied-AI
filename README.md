@@ -232,7 +232,7 @@ MAX_GRASP_ATTEMPTS = 3
 除了自动分拣，还可以用键盘手动控制机械臂探索场景：
 
 ```bash
-python mujoco_demo.py              # 3D 交互查看器
+mjpython mujoco_demo.py              # 3D 交互查看器
 python mujoco_demo.py --mode cv    # OpenCV 离屏渲染
 ```
 

@@ -30,16 +30,19 @@ from .scene_constants import (
 #   3) 首次抬起 +5 一次性 bonus：鼓励真抓，但不能每步刷
 W_ACTION_PENALTY = 0.001
 W_STEP_PENALTY = 0.01
-W_REACH_CLIP = 1.0             # |reach| ≤ 此值
+W_REACH_CLIP = 1.0
 W_LIFT_LINEAR = 5.0
 W_HELD_BASELINE = 3.0
 W_OVERLIFT = 0.5
-W_TRANSPORT = 3.0              # phase B transport 系数（原本是 1.0 隐式，现显式加大）
-R_FIRST_LIFT_BONUS = 20.0      # 首次抬起，episode 内一次性
-R_FIRST_NEAR_TARGET = 15.0     # 首次抓着物体靠近目标 < 10cm，episode 内一次性
-NEAR_TARGET_RADIUS = 0.10      # 触发 first_near_target 的距离阈值
+# v6 回滚：v5 的 W_TRANSPORT=3 让 agent 急冲撞飞物体（OOB 30%），回到 1.0
+W_TRANSPORT = 1.0
+R_FIRST_LIFT_BONUS = 20.0
+# v6 回滚：v5 的 R_FIRST_NEAR_TARGET=15 reward 跳跃太大让 critic 学崩，
+# 缩到 5.0 当温和 milestone
+R_FIRST_NEAR_TARGET = 5.0
+NEAR_TARGET_RADIUS = 0.10
 R_PLACED_BONUS = 50.0
-R_OOB_PENALTY = 10.0           # OOB 时给 −R_OOB_PENALTY
+R_OOB_PENALTY = 10.0
 
 
 @dataclass

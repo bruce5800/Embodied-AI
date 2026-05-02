@@ -125,10 +125,17 @@ def main():
     # 直接用 cfg 的 gradient_steps（不补偿乘 n_envs），换 wall-clock 加速。
     # SAC 文献验证 update-to-data ratio 0.1 ~ 1.0 都能学，N=8 + grad=1 足够。
     grad_steps = int(cfg["gradient_steps"])
+
+    # LR linear decay：缓解长训后期 critic 漂移导致的 reward 退步
+    base_lr = float(cfg["learning_rate"])
+    def lr_schedule(progress_remaining: float) -> float:
+        # SB3 传入 1.0 → 0.0；最低保留 10% lr
+        return base_lr * max(progress_remaining, 0.1)
+
     model = SAC(
         cfg["policy"],
         train_env,
-        learning_rate=float(cfg["learning_rate"]),
+        learning_rate=lr_schedule,
         buffer_size=int(cfg["buffer_size"]),
         batch_size=int(cfg["batch_size"]),
         tau=float(cfg["tau"]),
@@ -145,17 +152,20 @@ def main():
     )
 
     # ── 回调 ──
+    # VecEnv 下 callback 的 freq 是 vec_steps，要除以 n_envs 才是 env_steps 节奏
+    eval_freq_vec = max(int(cfg["eval_freq"]) // max(args.n_envs, 1), 1)
+    ckpt_freq_vec = max(int(cfg["checkpoint_freq"]) // max(args.n_envs, 1), 1)
     eval_cb = EvalCallback(
         eval_env,
         best_model_save_path=str(ckpt_dir),
         log_path=str(log_dir),
-        eval_freq=int(cfg["eval_freq"]),
+        eval_freq=eval_freq_vec,
         n_eval_episodes=int(cfg["n_eval_episodes"]),
         deterministic=True,
         render=False,
     )
     ckpt_cb = CheckpointCallback(
-        save_freq=int(cfg["checkpoint_freq"]),
+        save_freq=ckpt_freq_vec,
         save_path=str(ckpt_dir),
         name_prefix="sac",
     )
