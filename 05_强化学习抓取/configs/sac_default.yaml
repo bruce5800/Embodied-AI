@@ -14,8 +14,11 @@ learning_starts: 10_000           # 前 10k 步纯随机，填 buffer
 # SAC 特有
 tau: 0.005                        # target network soft update
 gamma: 0.99
-ent_coef: auto                    # 自动熵调节
-target_entropy: auto
+# v3 改动：固定 ent_coef，不再 auto。原因：6-dim action 下默认 target_entropy=-6
+# 推动 ent_coef 在 50k step 内降到 0.008，policy 过早 deterministic 卡局部解。
+# 0.1 是 manipulation 常见值，保留足够探索。
+ent_coef: 0.1
+target_entropy: auto              # 不生效（ent_coef 已固定）
 
 # 训练频率
 gradient_steps: 1

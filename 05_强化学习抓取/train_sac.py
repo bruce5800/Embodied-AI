@@ -26,6 +26,7 @@ from stable_baselines3.common.callbacks import (
     CallbackList, CheckpointCallback, EvalCallback,
 )
 from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 from env import GraspEnv
 
@@ -34,7 +35,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 
 
 def make_env(target_object, max_episode_steps, seed):
-    """构造单个 GraspEnv（包 Monitor 用于 EvalCallback）。"""
+    """构造单个 GraspEnv（包 Monitor 用于 EvalCallback）— 给 eval / 单 env 训练用。"""
     env = GraspEnv(
         target_object=target_object,
         max_episode_steps=max_episode_steps,
@@ -42,6 +43,28 @@ def make_env(target_object, max_episode_steps, seed):
     env = Monitor(env)
     env.reset(seed=seed)
     return env
+
+
+def make_env_fn(target_object, max_episode_steps, seed):
+    """工厂函数（闭包不捕获 mujoco 句柄，给 SubprocVecEnv 用）。"""
+    def _init():
+        env = GraspEnv(
+            target_object=target_object,
+            max_episode_steps=max_episode_steps,
+        )
+        env = Monitor(env)
+        env.reset(seed=seed)
+        return env
+    return _init
+
+
+def make_train_vec_env(target, max_episode_steps, seed, n_envs):
+    """n_envs > 1 用 SubprocVecEnv（多进程），= 1 用 DummyVecEnv（单进程）。"""
+    fns = [make_env_fn(target, max_episode_steps, seed=seed + i)
+           for i in range(n_envs)]
+    if n_envs > 1:
+        return SubprocVecEnv(fns, start_method="spawn")
+    return DummyVecEnv(fns)
 
 
 def parse_target(target_arg: str):
@@ -58,6 +81,9 @@ def main():
                         help="覆盖 config 里的 total_timesteps")
     parser.add_argument("--max-episode-steps", type=int, default=250)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--n-envs", type=int, default=1,
+                        help="并行训练 env 数量（SubprocVecEnv）。"
+                             "M 系列 Mac 推荐 4-6。eval env 始终单进程。")
     parser.add_argument("--run-name", default="m1_red",
                         help="日志/检查点子目录名")
     parser.add_argument("--logdir", default="logs")
@@ -81,15 +107,24 @@ def main():
     print(f"  target          : {args.target}  (None=random per episode)")
     print(f"  total_timesteps : {total_steps:,}")
     print(f"  max_ep_steps    : {args.max_episode_steps}")
+    print(f"  n_envs          : {args.n_envs}  "
+          f"({'SubprocVecEnv' if args.n_envs > 1 else 'DummyVecEnv'})")
     print(f"  log_dir         : {log_dir}")
     print(f"  ckpt_dir        : {ckpt_dir}")
     print("─" * 60)
 
     # ── env ──
-    train_env = make_env(target, args.max_episode_steps, seed=args.seed)
+    train_env = make_train_vec_env(
+        target, args.max_episode_steps, args.seed, args.n_envs,
+    )
+    # eval env 单进程足够（n_eval_episodes=20 串行也很快）
     eval_env = make_env(target, args.max_episode_steps, seed=args.seed + 10_000)
 
     # ── 模型 ──
+    # VecEnv 下 train_freq=1 含义是"每 vec_step 训 1 次"（= 收集 n_envs 个 transitions），
+    # 直接用 cfg 的 gradient_steps（不补偿乘 n_envs），换 wall-clock 加速。
+    # SAC 文献验证 update-to-data ratio 0.1 ~ 1.0 都能学，N=8 + grad=1 足够。
+    grad_steps = int(cfg["gradient_steps"])
     model = SAC(
         cfg["policy"],
         train_env,
@@ -101,7 +136,7 @@ def main():
         ent_coef=cfg["ent_coef"],
         target_entropy=cfg["target_entropy"],
         learning_starts=int(cfg["learning_starts"]),
-        gradient_steps=int(cfg["gradient_steps"]),
+        gradient_steps=grad_steps,
         train_freq=int(cfg["train_freq"]),
         policy_kwargs=cfg.get("policy_kwargs", {}),
         tensorboard_log=str(log_dir),
