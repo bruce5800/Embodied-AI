@@ -21,16 +21,22 @@ from .scene_constants import (
 
 
 # ─── 各项奖励权重 ───
-# v2 改动：去掉 touch_bonus / near_grip_bonus（500k 训练显示 agent 用它们刷分
-# 不真正抓起；正 reward + 0% success = 经典 reward gaming）。
-# 新设计：phase A 只给 reach + lift（连续梯度），phase B 给明显更高的 baseline，
-# 让 phase B 平均 reward ≫ phase A，agent 才有动力真抓起来。
-W_ACTION_PENALTY = 0.001       # -‖a‖²
-W_STEP_PENALTY = 0.01          # 每步小惩罚
-W_LIFT_LINEAR = 5.0            # 抬起斜率（2 → 5：让 lift 变得显著有吸引力）
-W_HELD_BASELINE = 3.0          # phase B 基础（1 → 3：远高于 phase A 平均）
-W_OVERLIFT = 0.5               # 抬太高的扣分系数
-R_PLACED_BONUS = 50.0          # 终止 bonus（20 → 50）
+# v3 改动（针对 500k 训练发现的 OOB hack）：
+# 现象：mean_length 250→157，lift_rate 始终 ≤20%，agent 学撞飞物体提前 truncate。
+# 根因：OOB 没惩罚，截断本身让 agent 少受 step_penalty + reach 负值，等价奖励逃跑。
+# 修复：
+#   1) OOB penalty −10：堵住"自杀逃跑"漏洞
+#   2) reach clip 到 −1.0：防止远距离时 reach 项过负，让 OOB 显得诱人
+#   3) 首次抬起 +5 一次性 bonus：鼓励真抓，但不能每步刷
+W_ACTION_PENALTY = 0.001
+W_STEP_PENALTY = 0.01
+W_REACH_CLIP = 1.0             # |reach| ≤ 此值
+W_LIFT_LINEAR = 5.0
+W_HELD_BASELINE = 3.0
+W_OVERLIFT = 0.5
+R_FIRST_LIFT_BONUS = 5.0       # episode 内一次性，env 跟踪
+R_PLACED_BONUS = 50.0
+R_OOB_PENALTY = 10.0           # OOB 时给 −R_OOB_PENALTY
 
 
 @dataclass
@@ -40,10 +46,12 @@ class RewardBreakdown:
     step_penalty: float
     reach: float
     lift_linear: float
+    first_lift_bonus: float
     held_baseline: float
     transport: float
     overlift_penalty: float
     placed_bonus: float
+    oob_penalty: float
     total: float
 
     def to_dict(self):
@@ -58,23 +66,25 @@ def compute_reward(
     target_zone_pos: np.ndarray,
     has_contact: bool,
     action: np.ndarray,
+    first_lift_pending: bool,
 ):
     """
     单步 reward 计算。
 
     Args:
-        data:               MjData（已 mj_forward）
-        site_ee_id:         end_effector site id
-        target_body_id:     当前 episode 的目标物体 body id
-        target_zone_pos:    目标区中心 xyz
-        has_contact:        gripper geom 是否接触 obj geom（env 用 mj_contact 算）
-        action:             RL 动作（4-dim, 已裁剪到 [-1, 1]）
+        data:                MjData（已 mj_forward）
+        site_ee_id:          end_effector site id
+        target_body_id:      当前 episode 的目标物体 body id
+        target_zone_pos:     目标区中心 xyz
+        has_contact:         gripper geom 是否接触 obj geom（env 用 mj_contact 算）
+        action:              RL 动作（已裁剪到 [-1, 1]）
+        first_lift_pending:  episode 内还没发过 first_lift bonus（env 跟踪）
 
     Returns:
         reward (float)
         terminated (bool)         placed 成功
         truncated_oob (bool)      物体被推飞 ⇒ env 决定要不要 truncate
-        info (dict)               调试信息
+        info (dict)               调试信息（含 first_lift_consumed flag）
     """
     ee_pos = data.site_xpos[site_ee_id]
     obj_pos = data.xpos[target_body_id]
@@ -106,13 +116,20 @@ def compute_reward(
     # ── 分阶段项 ──
     reach = 0.0
     lift_linear = 0.0
+    first_lift_bonus = 0.0
     held_baseline = 0.0
     transport = 0.0
     overlift_penalty = 0.0
 
+    # 一次性首次抬起 bonus：env 跟踪 first_lift_pending，这里只判定是否消费
+    first_lift_consumed = False
+    if first_lift_pending and is_lifted:
+        first_lift_bonus = R_FIRST_LIFT_BONUS
+        first_lift_consumed = True
+
     if not held:
-        # 阶段 A：接近 + 抬起（移除了 touch/near_grip 重复 bonus）
-        reach = -d_ee_obj
+        # 阶段 A：接近 + 抬起。reach 加 clip 防极端值
+        reach = -min(d_ee_obj, W_REACH_CLIP)
         lift_linear = W_LIFT_LINEAR * max(0.0, obj_z - LIFT_THRESHOLD)
     else:
         # 阶段 B：保持抓握并运送到目标区。baseline 高，明显优于 phase A
@@ -121,21 +138,25 @@ def compute_reward(
         overlift_penalty = -W_OVERLIFT * max(0.0, obj_z - LIFT_TARGET_Z)
 
     placed_bonus = R_PLACED_BONUS if placed else 0.0
+    # OOB 强惩罚：堵住"撞飞物体提前 truncate 逃跑"的 reward gaming
+    oob_penalty = -R_OOB_PENALTY if oob else 0.0
 
     total = (action_penalty + step_penalty
-             + reach + lift_linear
+             + reach + lift_linear + first_lift_bonus
              + held_baseline + transport + overlift_penalty
-             + placed_bonus)
+             + placed_bonus + oob_penalty)
 
     breakdown = RewardBreakdown(
         action_penalty=action_penalty,
         step_penalty=step_penalty,
         reach=reach,
         lift_linear=lift_linear,
+        first_lift_bonus=first_lift_bonus,
         held_baseline=held_baseline,
         transport=transport,
         overlift_penalty=overlift_penalty,
         placed_bonus=placed_bonus,
+        oob_penalty=oob_penalty,
         total=total,
     )
 
@@ -149,6 +170,7 @@ def compute_reward(
         "d_ee_obj": d_ee_obj,
         "d_obj_tgt": d_obj_tgt_xy,
         "obj_z": obj_z,
+        "first_lift_consumed": first_lift_consumed,
         "reward_breakdown": breakdown.to_dict(),
     }
 
