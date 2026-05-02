@@ -34,7 +34,10 @@ W_REACH_CLIP = 1.0             # |reach| ≤ 此值
 W_LIFT_LINEAR = 5.0
 W_HELD_BASELINE = 3.0
 W_OVERLIFT = 0.5
-R_FIRST_LIFT_BONUS = 5.0       # episode 内一次性，env 跟踪
+W_TRANSPORT = 3.0              # phase B transport 系数（原本是 1.0 隐式，现显式加大）
+R_FIRST_LIFT_BONUS = 20.0      # 首次抬起，episode 内一次性
+R_FIRST_NEAR_TARGET = 15.0     # 首次抓着物体靠近目标 < 10cm，episode 内一次性
+NEAR_TARGET_RADIUS = 0.10      # 触发 first_near_target 的距离阈值
 R_PLACED_BONUS = 50.0
 R_OOB_PENALTY = 10.0           # OOB 时给 −R_OOB_PENALTY
 
@@ -49,6 +52,7 @@ class RewardBreakdown:
     first_lift_bonus: float
     held_baseline: float
     transport: float
+    first_near_target_bonus: float
     overlift_penalty: float
     placed_bonus: float
     oob_penalty: float
@@ -67,6 +71,7 @@ def compute_reward(
     has_contact: bool,
     action: np.ndarray,
     first_lift_pending: bool,
+    first_near_target_pending: bool,
 ):
     """
     单步 reward 计算。
@@ -119,9 +124,10 @@ def compute_reward(
     first_lift_bonus = 0.0
     held_baseline = 0.0
     transport = 0.0
+    first_near_target_bonus = 0.0
     overlift_penalty = 0.0
 
-    # 一次性首次抬起 bonus：env 跟踪 first_lift_pending，这里只判定是否消费
+    # 一次性首次抬起 bonus
     first_lift_consumed = False
     if first_lift_pending and is_lifted:
         first_lift_bonus = R_FIRST_LIFT_BONUS
@@ -132,10 +138,17 @@ def compute_reward(
         reach = -min(d_ee_obj, W_REACH_CLIP)
         lift_linear = W_LIFT_LINEAR * max(0.0, obj_z - LIFT_THRESHOLD)
     else:
-        # 阶段 B：保持抓握并运送到目标区。baseline 高，明显优于 phase A
+        # 阶段 B：保持抓握并运送到目标区
         held_baseline = W_HELD_BASELINE
-        transport = -d_obj_tgt_xy
+        transport = -W_TRANSPORT * d_obj_tgt_xy
         overlift_penalty = -W_OVERLIFT * max(0.0, obj_z - LIFT_TARGET_Z)
+
+    # 一次性首次靠近目标 bonus（必须 held 状态下，并且 xy 距 < NEAR_TARGET_RADIUS）
+    first_near_consumed = False
+    if (first_near_target_pending and held
+            and d_obj_tgt_xy < NEAR_TARGET_RADIUS):
+        first_near_target_bonus = R_FIRST_NEAR_TARGET
+        first_near_consumed = True
 
     placed_bonus = R_PLACED_BONUS if placed else 0.0
     # OOB 强惩罚：堵住"撞飞物体提前 truncate 逃跑"的 reward gaming
@@ -143,7 +156,8 @@ def compute_reward(
 
     total = (action_penalty + step_penalty
              + reach + lift_linear + first_lift_bonus
-             + held_baseline + transport + overlift_penalty
+             + held_baseline + transport + first_near_target_bonus
+             + overlift_penalty
              + placed_bonus + oob_penalty)
 
     breakdown = RewardBreakdown(
@@ -154,6 +168,7 @@ def compute_reward(
         first_lift_bonus=first_lift_bonus,
         held_baseline=held_baseline,
         transport=transport,
+        first_near_target_bonus=first_near_target_bonus,
         overlift_penalty=overlift_penalty,
         placed_bonus=placed_bonus,
         oob_penalty=oob_penalty,
@@ -171,6 +186,7 @@ def compute_reward(
         "d_obj_tgt": d_obj_tgt_xy,
         "obj_z": obj_z,
         "first_lift_consumed": first_lift_consumed,
+        "first_near_consumed": first_near_consumed,
         "reward_breakdown": breakdown.to_dict(),
     }
 

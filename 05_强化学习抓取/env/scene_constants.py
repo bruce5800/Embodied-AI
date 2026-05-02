@@ -23,8 +23,11 @@ GRIPPER_IDX = 5       # joint6 控制夹爪
 
 
 # ─── 夹爪命令范围（弧度） ───
+# v3 改动：CLOSE 从 -30° 加深到 -45°（XML range 下限是 -50°），让 RL 命令 -1 时
+# 夹爪能真正闭紧。诊断显示原 -30° 下 contact_rate 80% 但 lift_rate 3% =
+# "碰到但夹不住"。
 GRIPPER_OPEN = np.radians(90)
-GRIPPER_CLOSE = np.radians(-30)
+GRIPPER_CLOSE = np.radians(-45)
 # 夹爪角度小于此值视为"正在闭合/已闭合"（用于判定 held 状态）
 HELD_GRIP_THRESHOLD = np.radians(30)
 

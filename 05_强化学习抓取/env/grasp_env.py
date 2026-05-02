@@ -112,6 +112,7 @@ class GraspEnv(gym.Env):
         self._target_obj: Optional[str] = None
         self._target_zone_pos = np.zeros(3)
         self._first_lift_pending = True  # episode 内是否还没发过 first_lift bonus
+        self._first_near_pending = True  # 是否还没发过 first_near_target bonus
 
         # ── gym spaces ──
         # 6 dim：5 关节增量 + 1 夹爪
@@ -169,6 +170,7 @@ class GraspEnv(gym.Env):
 
         self._steps = 0
         self._first_lift_pending = True
+        self._first_near_pending = True
         return self._build_obs(), self._build_info_reset()
 
     def step(self, action):
@@ -204,10 +206,13 @@ class GraspEnv(gym.Env):
             has_contact=has_contact,
             action=action,
             first_lift_pending=self._first_lift_pending,
+            first_near_target_pending=self._first_near_pending,
         )
-        # 一次性 first_lift bonus 已发，关闭 flag
+        # 一次性 milestone bonus 已发，关闭 flag
         if rew_info.get("first_lift_consumed", False):
             self._first_lift_pending = False
+        if rew_info.get("first_near_consumed", False):
+            self._first_near_pending = False
 
         truncated_timeout = self._steps >= self._max_steps
         truncated = bool(truncated_oob or truncated_timeout)
