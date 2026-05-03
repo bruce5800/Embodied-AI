@@ -275,12 +275,15 @@ class GraspEnv(gym.Env):
         return GRIPPER_CLOSE + (a + 1.0) * 0.5 * (GRIPPER_OPEN - GRIPPER_CLOSE)
 
     def _setup_collision_groups(self):
-        """三组碰撞分组：floor 只与 obj，arm 只与 obj，obj 与 floor+arm。
+        """三组碰撞分组（v2：arm 也与 floor 碰，防止穿模）
 
         位掩码规则（MuJoCo）：geom1.contype & geom2.conaffinity 或反之非零则碰撞。
         floor:  ct=1, ca=1
-        obj:    ct=5, ca=3   (5=1|4 与 floor 的 ca=1 相 AND, 与 arm 的 ca=4 相 AND)
-        arm:    ct=2, ca=4   (与 floor 的 ct=1 相 AND=0 ⇒ 不碰；与 obj 的 ca=3 相 AND=2 ⇒ 碰)
+        obj:    ct=5, ca=3   (与 floor + arm 都碰)
+        arm:    ct=2, ca=5   (与 floor 碰防穿模；arm 自己 2&5=0 不自碰；与 obj 5&5=5 / 2&3=2 → 碰)
+
+        v1 旧设计 arm.ca=4 让 arm 不与 floor 碰，导致可视化看到"穿地板"。
+        v2 改 arm.ca=5 让 arm 跟 floor 碰，阻止穿模。
         """
         m = self._model
 
@@ -296,7 +299,10 @@ class GraspEnv(gym.Env):
                 m.geom_contype[gid] = 5
                 m.geom_conaffinity[gid] = 3
 
-        # 所有 arm geom
+        # 所有 arm geom：保留 ca=4（不与 floor 碰，允许穿模）
+        # 已知副作用：视觉看着 arm 穿地板。这是 SO-100 EE site 在 link5 上方 9cm
+        # 的几何决定的——抓 z≈0.03 地面物体要求 link5 几何下到 z<0。
+        # 让 arm 撞 floor 会让 IK 全部不可达（实测 expert lift 17%→0%）
         for name in ("base_geom", "link1_geom", "link2_geom", "link3_geom",
                      "link4_geom", "link5_geom", "gripper_geom"):
             gid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, name)

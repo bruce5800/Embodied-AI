@@ -13,3 +13,4 @@ runs/
 05_强化学习抓取/logs/
 05_强化学习抓取/checkpoints/
 05_强化学习抓取/eval_renders/
+05_强化学习抓取/expert_renders/
