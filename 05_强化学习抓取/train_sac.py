@@ -142,7 +142,11 @@ def main():
     grad_steps = int(cfg["gradient_steps"])
 
     # LR linear decay：缓解长训后期 critic 漂移导致的 reward 退步
+    # fine-tune 时（load_from 给定）用 1/3 的 LR 起步，避免洗掉已学策略
     base_lr = float(cfg["learning_rate"])
+    if args.load_from is not None:
+        base_lr = base_lr / 3.0
+        print(f"  → fine-tune mode: lr scaled to {base_lr:.2e}")
     def lr_schedule(progress_remaining: float) -> float:
         # SB3 传入 1.0 → 0.0；最低保留 10% lr
         return base_lr * max(progress_remaining, 0.1)
@@ -156,8 +160,17 @@ def main():
             tensorboard_log=str(log_dir),
             custom_objects={"learning_rate": lr_schedule},
         )
-        # learning_starts 设为 0：buffer 已有数据
-        model.learning_starts = 0
+        # 加载 replay buffer（如果存在）—— 防止 fine-tune 时 critic 从空 buffer 学崩
+        from pathlib import Path as _P
+        buffer_path = _P(args.load_from).with_name("replay_buffer.pkl")
+        if buffer_path.exists():
+            print(f"  → loading replay buffer from {buffer_path}")
+            model.load_replay_buffer(str(buffer_path))
+            model.learning_starts = 0
+        else:
+            print(f"  ⚠ no replay buffer at {buffer_path}, starting empty "
+                  f"(fine-tune may regress without prior transitions)")
+            model.learning_starts = 0
     else:
         model = SAC(
             cfg["policy"],
@@ -206,7 +219,11 @@ def main():
 
     final_path = ckpt_dir / "final.zip"
     model.save(final_path)
+    # 同时保存 replay buffer 给后续 fine-tune 用
+    buffer_path = ckpt_dir / "replay_buffer.pkl"
+    model.save_replay_buffer(str(buffer_path))
     print(f"\nfinal model saved → {final_path}")
+    print(f"replay buffer saved → {buffer_path}")
 
     # 简短的最终评估
     print("\n最终评估（10 episode, deterministic）:")

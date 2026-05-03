@@ -32,7 +32,11 @@ W_ACTION_PENALTY = 0.001
 W_STEP_PENALTY = 0.01
 W_REACH_CLIP = 1.0
 W_LIFT_LINEAR = 5.0
-W_HELD_BASELINE = 3.0
+# v9 修：v8 把 held_baseline 砍到 0 后 agent 学到"撞飞物体刷 first_lift +20"hack
+# （OOB 58%, held 0%）。回到 0.5：phase B 有最低入场激励，但不像 v7 的 3.0 那样
+# 让"抱着到超时"=600 >> placed_bonus。
+# 数学：抱着 250 步累积 = 0.5×250 = 125 < placed_bonus 200，agent 选放下
+W_HELD_BASELINE = 0.5
 W_OVERLIFT = 0.5
 # v6 回滚：v5 的 W_TRANSPORT=3 让 agent 急冲撞飞物体（OOB 30%），回到 1.0
 W_TRANSPORT = 1.0
@@ -41,7 +45,8 @@ R_FIRST_LIFT_BONUS = 20.0
 # 缩到 5.0 当温和 milestone
 R_FIRST_NEAR_TARGET = 5.0
 NEAR_TARGET_RADIUS = 0.10
-R_PLACED_BONUS = 50.0
+# v8 修：50 → 200，让"放下成功"显著优于"抱着到超时"
+R_PLACED_BONUS = 200.0
 R_OOB_PENALTY = 10.0
 
 
@@ -139,8 +144,9 @@ def compute_reward(
     overlift_penalty = 0.0
 
     # 一次性首次抬起 bonus
+    # v9 修：要求 held=True（不能光靠物体被撞飞触发）。否则 agent 学撞飞 hack
     first_lift_consumed = False
-    if first_lift_pending and is_lifted:
+    if first_lift_pending and held:
         first_lift_bonus = R_FIRST_LIFT_BONUS
         first_lift_consumed = True
 
