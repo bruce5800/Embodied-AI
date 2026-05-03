@@ -68,10 +68,11 @@ GOTO_TOL = 0.025
 # 增加 GRIP_HOLD 让 gripper 充分关闭 + 物体稳定后再抬起
 GRIP_HOLD_STEPS = 50        # 20 → 50
 
-# v7 用户反馈："夹太紧把物体挤出"——靠高 friction (5.0) 维持抓握，闭合不需要太紧
-# 旧 -0.4 (ctrl ≈ -4.5°) 在低摩擦时合理；高摩擦下应放松到 -0.2 (ctrl ≈ +9°)
-# finger 半开 + 高摩擦 = 接触面"粘"住物体，不挤压
-GRIP_CLOSE_ACTION = -0.2
+# v8 用户反馈："blue_cube 5cm 比较大，再松一点"——继续放松
+# v7  -0.4 (ctrl -4.5°): 低摩擦下合理但太紧，cube 挤出
+# v8  -0.2 (ctrl +9°)  : 仍挤 cube
+# v9  -0.1 (ctrl +16°) : finger 间距更大，靠 friction 维持
+GRIP_CLOSE_ACTION = -0.1
 GRIP_OPEN_ACTION = 1.0
 
 # v3 抬起阶段慢慢来：抬起前先让物体稳定几十步
@@ -529,26 +530,28 @@ def run_episode(env, seed, verbose=False, record_frames=False):
         if frames is not None:
             frames.append(env.render())
 
-    def goto(target_pos, gripper_open, label):
+    def goto(target_pos, gripper_open, label, precise=False):
         """循环走到 target_pos。
 
-        IK_MODE=='finger_target' 下检查 finger center xy + EE z 距离 target。
-        其他模式检查 EE site 距离 target。
+        precise=True: 用 closed-loop finger_target IK（慢但 finger 精确对位 cube）
+                      仅 grasp 阶段需要
+        precise=False: 用 anti_underground IK（快，仅约束 finger 不穿地）
+                       pre_grasp / lift / transport / descend_place 用此
+
+        速度对比：closed-loop 每 step 调 3×15 = 45 次 IK，普通 anti_underground 8 次。
         """
         target_xy = np.asarray(target_pos[:2], dtype=np.float64)
         target_z = float(target_pos[2])
         for _ in range(PHASE_MAX_ITERS):
             data = env._data
-            if IK_MODE == "finger_target":
-                target_q, _ = solve_ik_finger_target(env._model, data.qpos, target_pos)
-            elif IK_MODE == "anti_underground":
-                target_q, _ = solve_ik_anti_underground(env._model, data.qpos, target_pos)
-            elif IK_MODE == "constrained_pitch":
-                target_q, _ = solve_ik_constrained_pitch(env._model, data.qpos, target_pos)
-            elif IK_MODE == "3dof_locked":
-                target_q, _ = solve_ik_locked_wrist(env._model, data.qpos, target_pos)
+            if precise:
+                target_q, _ = solve_ik_finger_target(
+                    env._model, data.qpos, target_pos)
             else:
-                target_q, _ = solve_ik_multistart(env._model, data.qpos, target_pos)
+                # num_attempts=12: 平衡速度与可达性。
+                #   8 太少（pre_grasp 经常 IK return None）；20 跟 closed-loop 一样慢
+                target_q, _ = solve_ik_anti_underground(
+                    env._model, data.qpos, target_pos, num_attempts=12)
             if target_q is None:
                 return False
             cur_ctrl = data.ctrl[:N_ARM_JOINTS].copy()
@@ -558,8 +561,9 @@ def run_episode(env, seed, verbose=False, record_frames=False):
             state["ever_lifted"] = (state["ever_lifted"]
                                     or state["info"].get("lifted", False))
 
-            # 收敛判断：finger_target 模式下检查 finger center xy + ee z
-            if IK_MODE == "finger_target":
+            # 收敛判断
+            if precise:
+                # finger center xy + EE z 距离 target
                 mujoco.mj_forward(env._model, env._data)
                 finger_xy = _compute_finger_center_xy(env._model, env._data)
                 ee = state["info"]["ee_pos"]
@@ -603,19 +607,21 @@ def run_episode(env, seed, verbose=False, record_frames=False):
         return True
 
     phase_failed = None
-    if not goto(pre_grasp, True, "pre_grasp"):
+    # 仅 grasp 阶段用 closed-loop precise IK（finger center 精确对准 cube）
+    # 其他阶段用快速 anti_underground IK（5x speedup）
+    if not goto(pre_grasp, True, "pre_grasp", precise=False):
         phase_failed = "pre_grasp"
-    elif not goto(grasp_pos, True, "grasp"):
+    elif not goto(grasp_pos, True, "grasp", precise=True):
         phase_failed = "descend_grasp"
     elif not hold_gripper(close=True):
         phase_failed = "close"
-    elif not settle(LIFT_SETTLE_STEPS):  # 让 gripper 完全闭合稳住物体后再抬
+    elif not settle(LIFT_SETTLE_STEPS):
         phase_failed = "settle"
-    elif not goto(lift_pos, False, "lift"):
+    elif not goto(lift_pos, False, "lift", precise=False):
         phase_failed = "lift"
-    elif not goto(place_above, False, "transport"):
+    elif not goto(place_above, False, "transport", precise=False):
         phase_failed = "transport"
-    elif not goto(place_low, False, "descend_place"):
+    elif not goto(place_low, False, "descend_place", precise=False):
         phase_failed = "descend_place"
     elif not hold_gripper(close=False):
         phase_failed = "release"

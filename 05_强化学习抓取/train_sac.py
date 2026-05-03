@@ -91,7 +91,11 @@ def main():
                         help="反向课程：target 物体在 zone ±radius 方框内随机。"
                              "None=全场景。建议阶梯 0.05 → 0.15 → None。")
     parser.add_argument("--load-from", type=str, default=None,
-                        help="从已有 ckpt 继续训练（路径到 .zip 文件）。")
+                        help="从已有 ckpt 继续训练（路径到 .zip 文件）。"
+                             "也可以是 BC pretrain 的 policy.zip。")
+    parser.add_argument("--load-demos", type=str, default=None,
+                        help="npz 路径（collect_demos.py 输出），把 demo transitions "
+                             "灌入 replay buffer。配合 --load-from 是 SACfD 启动方式。")
     parser.add_argument("--run-name", default="m1_red",
                         help="日志/检查点子目录名")
     parser.add_argument("--logdir", default="logs")
@@ -166,11 +170,10 @@ def main():
         if buffer_path.exists():
             print(f"  → loading replay buffer from {buffer_path}")
             model.load_replay_buffer(str(buffer_path))
-            model.learning_starts = 0
         else:
-            print(f"  ⚠ no replay buffer at {buffer_path}, starting empty "
-                  f"(fine-tune may regress without prior transitions)")
-            model.learning_starts = 0
+            print(f"  ⚠ no replay buffer at {buffer_path} "
+                  f"(BC ckpt 通常无 buffer，配合 --load-demos)")
+        model.learning_starts = 0
     else:
         model = SAC(
             cfg["policy"],
@@ -190,6 +193,31 @@ def main():
             seed=args.seed,
             verbose=1,
         )
+
+    # ── 灌 demo transitions 进 replay buffer (SACfD style) ──
+    if args.load_demos is not None:
+        from pathlib import Path as _P
+        demos_path = _P(args.load_demos)
+        print(f"  → loading demos from {demos_path}")
+        data = np.load(demos_path)
+        d_obs = data["obs"]
+        d_act = data["action"]
+        d_rew = data["reward"]
+        d_nobs = data["next_obs"]
+        d_done = data["done"]
+        n_demo = len(d_obs)
+        # SB3 ReplayBuffer.add 接受 (n_envs,) 形状的 array
+        for i in range(n_demo):
+            model.replay_buffer.add(
+                obs=d_obs[i:i+1],
+                next_obs=d_nobs[i:i+1],
+                action=d_act[i:i+1],
+                reward=np.array([d_rew[i]], dtype=np.float32),
+                done=np.array([d_done[i]], dtype=np.float32),
+                infos=[{}],
+            )
+        print(f"  → loaded {n_demo:,} demo transitions into replay buffer")
+        model.learning_starts = 0   # buffer 有数据，不要 random rollout
 
     # ── 回调 ──
     # VecEnv 下 callback 的 freq 是 vec_steps，要除以 n_envs 才是 env_steps 节奏
