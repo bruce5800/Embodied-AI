@@ -58,6 +58,7 @@ class GraspEnv(gym.Env):
         max_episode_steps: int = MAX_EPISODE_STEPS,
         render_mode: Optional[str] = None,
         camera_name: str = "camera_front",
+        curriculum_radius: Optional[float] = None,
     ):
         super().__init__()
 
@@ -106,6 +107,10 @@ class GraspEnv(gym.Env):
         self._render_mode = render_mode
         self._camera_name = camera_name
         self._renderer = None
+        # 反向课程：target 物体在 zone ±radius 内随机；None 表示全场景
+        self._curriculum_radius = (
+            None if curriculum_radius is None else float(curriculum_radius)
+        )
 
         # ── 运行时状态 ──
         self._steps = 0
@@ -146,14 +151,7 @@ class GraspEnv(gym.Env):
         self._data.ctrl[:N_ARM_JOINTS] = ready
         self._data.ctrl[GRIPPER_IDX] = GRIPPER_OPEN
 
-        # 物体随机化
-        randomize_objects(self._model, self._data, np_random=self.np_random)
-
-        # 物理稳定（让物体落到桌面）
-        for _ in range(200):
-            mujoco.mj_step(self._model, self._data)
-
-        # 选目标
+        # 先选目标（reverse curriculum 需要先知道 target）
         if self._fixed_target is not None:
             self._target_obj = self._fixed_target
         else:
@@ -165,10 +163,31 @@ class GraspEnv(gym.Env):
         self._target_body_id = mujoco.mj_name2id(
             self._model, mujoco.mjtObj.mjOBJ_BODY, self._target_obj
         )
+
+        # 物体随机化（带 curriculum override）
+        if self._curriculum_radius is not None:
+            randomize_objects(
+                self._model, self._data,
+                np_random=self.np_random,
+                target_override={
+                    "name": self._target_obj,
+                    "center": self._target_zone_pos[:2],
+                    "radius": self._curriculum_radius,
+                },
+            )
+        else:
+            randomize_objects(self._model, self._data, np_random=self.np_random)
+
+        # 物理稳定（让物体落到桌面）
+        for _ in range(200):
+            mujoco.mj_step(self._model, self._data)
         self._target_geom_id = mujoco.mj_name2id(
             self._model, mujoco.mjtObj.mjOBJ_GEOM, f"{self._target_obj}_geom"
         )
 
+        # first_near_target_bonus 的判定要求 held=True，所以 reset 时即使 obj 已经
+        # 在 zone 内也不会立即触发（agent 必须先抓起来）。所以无需特殊处理。
+        # 之前版本的 d_init 判断反而剥夺了课程化下 agent 的 phase B milestone。
         self._steps = 0
         self._first_lift_pending = True
         self._first_near_pending = True

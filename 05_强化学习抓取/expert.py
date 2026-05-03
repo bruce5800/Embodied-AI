@@ -29,7 +29,7 @@ from env.scene_constants import (
 
 # ─── 抓取几何参数（先用 04 经验值，跑完按失败模式调） ───
 PRE_GRASP_HEIGHT = 0.10
-GRASP_Z_OFFSET = 0.03                      # EE 高于物体中心
+GRASP_Z_OFFSET = 0.02                      # EE 高于物体中心（之前 0.03 太高，gripper 没碰到物体）
 LIFT_HEIGHT = 0.20
 GRASP_XY_OFFSET = np.array([0.02, -0.02])  # 04 GRASP_OFFSET 的 xy 投影
 PLACE_HEIGHT_LOW = 0.04                    # 松手时 EE 离 zone 中心高度
@@ -41,9 +41,15 @@ IK_DAMPING = 0.05
 IK_NUM_ATTEMPTS = 8
 
 # ─── Scripted timing ───
-PHASE_MAX_ITERS = 80
-GOTO_TOL = 0.015            # EE 接近 target 视为到位
-GRIP_HOLD_STEPS = 15        # 闭/张夹爪保持步数
+# v1 实测：descend_grasp 卡了 57% (GOTO_TOL=0.015 太严，关节增量动作 + PD 滞后达不到)
+PHASE_MAX_ITERS = 150       # 80 → 150 给更多步走
+GOTO_TOL = 0.025            # 0.015 → 0.025 放宽到 2.5cm
+GRIP_HOLD_STEPS = 20        # 15 → 20 让 gripper 充分关闭
+
+# v2 实测：action[5]=-1.0（GRIPPER_CLOSE=-45°）太紧把物体挤飞，OOB 23%。
+# 用 GRIP_CLOSE_ACTION=-0.4 → ctrl ≈ -3°（"0° 就闭合"附近），温和闭合
+GRIP_CLOSE_ACTION = -0.4    # 闭爪动作值（vs -1.0 极端）
+GRIP_OPEN_ACTION = 1.0      # 张爪还是用 +1.0 极端
 
 
 def solve_ik_multistart(model, init_qpos, target_pos):
@@ -102,7 +108,7 @@ def joint_action(target_q, cur_ctrl, gripper_open):
     """绝对关节目标 → 6-dim 增量动作 [-1, 1]。"""
     delta = target_q - cur_ctrl
     a_arm = np.clip(delta / JOINT_DELTA_MAX, -1.0, 1.0)
-    a_grip = 1.0 if gripper_open else -1.0
+    a_grip = GRIP_OPEN_ACTION if gripper_open else GRIP_CLOSE_ACTION
     return np.concatenate([a_arm, [a_grip]]).astype(np.float32)
 
 
@@ -145,7 +151,7 @@ def run_episode(env, seed, verbose=False):
         """保持当前关节位置，只动 gripper。"""
         for _ in range(GRIP_HOLD_STEPS):
             action = np.zeros(6, dtype=np.float32)
-            action[5] = -1.0 if close else 1.0
+            action[5] = GRIP_CLOSE_ACTION if close else GRIP_OPEN_ACTION
             _, _, state["term"], state["trunc"], state["info"] = env.step(action)
             state["ever_lifted"] = (state["ever_lifted"]
                                     or state["info"].get("lifted", False))
@@ -184,8 +190,8 @@ def main():
     parser.add_argument("--episodes", type=int, default=50)
     parser.add_argument("--target", default="red_cylinder",
                         help="目标物体（'random' 表示随机）")
-    parser.add_argument("--max-episode-steps", type=int, default=600,
-                        help="env 内 max_episode_steps（脚本至少需 ~500）")
+    parser.add_argument("--max-episode-steps", type=int, default=1200,
+                        help="env 内 max_episode_steps（脚本 6 阶段 × 150 iter ≈ 900 步）")
     parser.add_argument("--seed-base", type=int, default=10_000)
     args = parser.parse_args()
 

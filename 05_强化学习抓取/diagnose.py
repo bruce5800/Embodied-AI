@@ -18,10 +18,13 @@ def main():
     parser.add_argument("--target", default="red_cylinder")
     parser.add_argument("--episodes", type=int, default=20)
     parser.add_argument("--max-steps", type=int, default=250)
+    parser.add_argument("--obj-radius", type=float, default=None,
+                        help="跟训练时同样的 curriculum_radius，否则评估不可比")
     args = parser.parse_args()
 
     target = None if args.target == "random" else args.target
-    env = GraspEnv(target_object=target, max_episode_steps=args.max_steps)
+    env = GraspEnv(target_object=target, max_episode_steps=args.max_steps,
+                   curriculum_radius=args.obj_radius)
     model = SAC.load(args.ckpt, env=env)
 
     # 阶段计数（per episode）

@@ -34,23 +34,25 @@ from env import GraspEnv
 REPO_ROOT = Path(__file__).resolve().parent
 
 
-def make_env(target_object, max_episode_steps, seed):
+def make_env(target_object, max_episode_steps, seed, curriculum_radius=None):
     """构造单个 GraspEnv（包 Monitor 用于 EvalCallback）— 给 eval / 单 env 训练用。"""
     env = GraspEnv(
         target_object=target_object,
         max_episode_steps=max_episode_steps,
+        curriculum_radius=curriculum_radius,
     )
     env = Monitor(env)
     env.reset(seed=seed)
     return env
 
 
-def make_env_fn(target_object, max_episode_steps, seed):
+def make_env_fn(target_object, max_episode_steps, seed, curriculum_radius=None):
     """工厂函数（闭包不捕获 mujoco 句柄，给 SubprocVecEnv 用）。"""
     def _init():
         env = GraspEnv(
             target_object=target_object,
             max_episode_steps=max_episode_steps,
+            curriculum_radius=curriculum_radius,
         )
         env = Monitor(env)
         env.reset(seed=seed)
@@ -58,9 +60,10 @@ def make_env_fn(target_object, max_episode_steps, seed):
     return _init
 
 
-def make_train_vec_env(target, max_episode_steps, seed, n_envs):
+def make_train_vec_env(target, max_episode_steps, seed, n_envs, curriculum_radius=None):
     """n_envs > 1 用 SubprocVecEnv（多进程），= 1 用 DummyVecEnv（单进程）。"""
-    fns = [make_env_fn(target, max_episode_steps, seed=seed + i)
+    fns = [make_env_fn(target, max_episode_steps, seed=seed + i,
+                       curriculum_radius=curriculum_radius)
            for i in range(n_envs)]
     if n_envs > 1:
         return SubprocVecEnv(fns, start_method="spawn")
@@ -84,6 +87,11 @@ def main():
     parser.add_argument("--n-envs", type=int, default=1,
                         help="并行训练 env 数量（SubprocVecEnv）。"
                              "M 系列 Mac 推荐 4-6。eval env 始终单进程。")
+    parser.add_argument("--obj-radius", type=float, default=None,
+                        help="反向课程：target 物体在 zone ±radius 方框内随机。"
+                             "None=全场景。建议阶梯 0.05 → 0.15 → None。")
+    parser.add_argument("--load-from", type=str, default=None,
+                        help="从已有 ckpt 继续训练（路径到 .zip 文件）。")
     parser.add_argument("--run-name", default="m1_red",
                         help="日志/检查点子目录名")
     parser.add_argument("--logdir", default="logs")
@@ -109,6 +117,9 @@ def main():
     print(f"  max_ep_steps    : {args.max_episode_steps}")
     print(f"  n_envs          : {args.n_envs}  "
           f"({'SubprocVecEnv' if args.n_envs > 1 else 'DummyVecEnv'})")
+    print(f"  obj_radius      : {args.obj_radius}  "
+          f"(None=full table)")
+    print(f"  load_from       : {args.load_from}")
     print(f"  log_dir         : {log_dir}")
     print(f"  ckpt_dir        : {ckpt_dir}")
     print("─" * 60)
@@ -116,9 +127,13 @@ def main():
     # ── env ──
     train_env = make_train_vec_env(
         target, args.max_episode_steps, args.seed, args.n_envs,
+        curriculum_radius=args.obj_radius,
     )
     # eval env 单进程足够（n_eval_episodes=20 串行也很快）
-    eval_env = make_env(target, args.max_episode_steps, seed=args.seed + 10_000)
+    # 关键：eval env 也用同样的 curriculum_radius，否则训练/评估指标不可比
+    eval_env = make_env(target, args.max_episode_steps,
+                        seed=args.seed + 10_000,
+                        curriculum_radius=args.obj_radius)
 
     # ── 模型 ──
     # VecEnv 下 train_freq=1 含义是"每 vec_step 训 1 次"（= 收集 n_envs 个 transitions），
@@ -132,24 +147,36 @@ def main():
         # SB3 传入 1.0 → 0.0；最低保留 10% lr
         return base_lr * max(progress_remaining, 0.1)
 
-    model = SAC(
-        cfg["policy"],
-        train_env,
-        learning_rate=lr_schedule,
-        buffer_size=int(cfg["buffer_size"]),
-        batch_size=int(cfg["batch_size"]),
-        tau=float(cfg["tau"]),
-        gamma=float(cfg["gamma"]),
-        ent_coef=cfg["ent_coef"],
-        target_entropy=cfg["target_entropy"],
-        learning_starts=int(cfg["learning_starts"]),
-        gradient_steps=grad_steps,
-        train_freq=int(cfg["train_freq"]),
-        policy_kwargs=cfg.get("policy_kwargs", {}),
-        tensorboard_log=str(log_dir),
-        seed=args.seed,
-        verbose=1,
-    )
+    if args.load_from is not None:
+        # 继续训练：加载 ckpt + 替换 env（新 curriculum_radius）+ 替换 lr_schedule
+        print(f"  → loading model from {args.load_from}")
+        model = SAC.load(
+            args.load_from,
+            env=train_env,
+            tensorboard_log=str(log_dir),
+            custom_objects={"learning_rate": lr_schedule},
+        )
+        # learning_starts 设为 0：buffer 已有数据
+        model.learning_starts = 0
+    else:
+        model = SAC(
+            cfg["policy"],
+            train_env,
+            learning_rate=lr_schedule,
+            buffer_size=int(cfg["buffer_size"]),
+            batch_size=int(cfg["batch_size"]),
+            tau=float(cfg["tau"]),
+            gamma=float(cfg["gamma"]),
+            ent_coef=cfg["ent_coef"],
+            target_entropy=cfg["target_entropy"],
+            learning_starts=int(cfg["learning_starts"]),
+            gradient_steps=grad_steps,
+            train_freq=int(cfg["train_freq"]),
+            policy_kwargs=cfg.get("policy_kwargs", {}),
+            tensorboard_log=str(log_dir),
+            seed=args.seed,
+            verbose=1,
+        )
 
     # ── 回调 ──
     # VecEnv 下 callback 的 freq 是 vec_steps，要除以 n_envs 才是 env_steps 节奏
