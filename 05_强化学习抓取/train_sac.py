@@ -96,6 +96,12 @@ def main():
     parser.add_argument("--load-demos", type=str, default=None,
                         help="npz 路径（collect_demos.py 输出），把 demo transitions "
                              "灌入 replay buffer。配合 --load-from 是 SACfD 启动方式。")
+    parser.add_argument("--lr", type=float, default=None,
+                        help="覆盖 config 的 learning_rate。BC fine-tune 推荐 3e-5（小 10x）"
+                             "防 critic 漂移把 actor 洗掉。")
+    parser.add_argument("--ent-coef", type=str, default=None,
+                        help="覆盖 ent_coef（'auto' / 0.05 / 0.01）。BC fine-tune 推荐"
+                             "更小 (0.05) 让 actor 更 deterministic 接近 BC")
     parser.add_argument("--run-name", default="m1_red",
                         help="日志/检查点子目录名")
     parser.add_argument("--logdir", default="logs")
@@ -147,10 +153,14 @@ def main():
 
     # LR linear decay：缓解长训后期 critic 漂移导致的 reward 退步
     # fine-tune 时（load_from 给定）用 1/3 的 LR 起步，避免洗掉已学策略
-    base_lr = float(cfg["learning_rate"])
-    if args.load_from is not None:
-        base_lr = base_lr / 3.0
-        print(f"  → fine-tune mode: lr scaled to {base_lr:.2e}")
+    if args.lr is not None:
+        base_lr = float(args.lr)
+        print(f"  → manual lr override: {base_lr:.2e}")
+    else:
+        base_lr = float(cfg["learning_rate"])
+        if args.load_from is not None:
+            base_lr = base_lr / 3.0
+            print(f"  → fine-tune mode: lr scaled to {base_lr:.2e}")
     def lr_schedule(progress_remaining: float) -> float:
         # SB3 传入 1.0 → 0.0；最低保留 10% lr
         return base_lr * max(progress_remaining, 0.1)
@@ -175,6 +185,12 @@ def main():
                   f"(BC ckpt 通常无 buffer，配合 --load-demos)")
         model.learning_starts = 0
     else:
+        ent_coef_value = args.ent_coef if args.ent_coef is not None else cfg["ent_coef"]
+        # 解析数字（不是 "auto"）
+        try:
+            ent_coef_value = float(ent_coef_value)
+        except (ValueError, TypeError):
+            pass  # 保留 "auto" 字符串
         model = SAC(
             cfg["policy"],
             train_env,
@@ -183,7 +199,7 @@ def main():
             batch_size=int(cfg["batch_size"]),
             tau=float(cfg["tau"]),
             gamma=float(cfg["gamma"]),
-            ent_coef=cfg["ent_coef"],
+            ent_coef=ent_coef_value,
             target_entropy=cfg["target_entropy"],
             learning_starts=int(cfg["learning_starts"]),
             gradient_steps=grad_steps,
@@ -206,17 +222,31 @@ def main():
         d_nobs = data["next_obs"]
         d_done = data["done"]
         n_demo = len(d_obs)
-        # SB3 ReplayBuffer.add 接受 (n_envs,) 形状的 array
-        for i in range(n_demo):
+
+        # SB3 ReplayBuffer.add 期望 shape=(n_envs, ...)。我们的 demo 是单序列，
+        # 按 vec batch 大小 (n_envs) 切片 add。剩余不到 n_envs 个的丢弃（< 8 transitions 损失忽略不计）
+        n_envs = model.replay_buffer.n_envs
+        n_full = (n_demo // n_envs) * n_envs
+        n_added = 0
+        for start in range(0, n_full, n_envs):
+            end = start + n_envs
+            obs_b = d_obs[start:end]
+            nobs_b = d_nobs[start:end]
+            act_b = d_act[start:end]
+            rew_b = d_rew[start:end].astype(np.float32)
+            done_b = d_done[start:end].astype(np.float32)
             model.replay_buffer.add(
-                obs=d_obs[i:i+1],
-                next_obs=d_nobs[i:i+1],
-                action=d_act[i:i+1],
-                reward=np.array([d_rew[i]], dtype=np.float32),
-                done=np.array([d_done[i]], dtype=np.float32),
-                infos=[{}],
+                obs=obs_b,
+                next_obs=nobs_b,
+                action=act_b,
+                reward=rew_b,
+                done=done_b,
+                infos=[{} for _ in range(n_envs)],
             )
-        print(f"  → loaded {n_demo:,} demo transitions into replay buffer")
+            n_added += n_envs
+        skipped = n_demo - n_added
+        print(f"  → loaded {n_added:,} demo transitions into replay buffer "
+              f"(skipped {skipped} tail; n_envs={n_envs})")
         model.learning_starts = 0   # buffer 有数据，不要 random rollout
 
     # ── 回调 ──

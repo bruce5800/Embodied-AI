@@ -1,17 +1,31 @@
-# 05 强化学习抓取 — SAC + Reverse Curriculum
+# 05 强化学习抓取 — SAC + Curriculum + BC
 
-在 04 阶段（脚本式抓取 + LLM 任务规划）之上，用 **SAC 强化学习 + 反向课程学习** 训练机械臂抓取-放置策略。
+在 04 阶段（脚本式抓取 + LLM 任务规划）之上，探索两条 RL 路线：
+1. **SAC + 反向课程学习**：从零训 RL，达成 placed 47%（受限场景）
+2. **BC + Expert demo**：用脚本式 expert 收集 demo 训行为克隆，达成 lift 80%（最难场景）
 
-## 当前最佳
+## 当前最佳成果
 
-**v10 stage 2 best_model**（[checkpoints/m1_yellow_s2_v3_buf/best_model.zip](checkpoints/m1_yellow_s2_v3_buf/best_model.zip)）：
+### 两条路线对比
 
-| 评估场景 | placed | held | lifted | OOB |
-|---------|--------|------|--------|-----|
-| 训练分布（zone_yellow ±10cm） | **47%** | 53% | 61% | 15% |
-| zero-shot 全场景 | 9% | 9% | 23% | 19% |
+| 路线 | 最佳 ckpt | 评估场景 | placed | lift |
+|------|---------|---------|--------|------|
+| **SAC + 课程化** | `checkpoints/m1_yellow_s2_v3_buf/best_model.zip` | yellow_cylinder, r=0.10 | **47%** | 53% |
+| 同上 | 同 | yellow_cylinder, full table | 9% | 23% |
+| **BC alone (50 demos)** | `checkpoints/bc_blue_cube/policy.zip` | blue_cube, full table | 0% | **80%** |
+| BC + SACfD（fine-tune 失败） | _-_ | _-_ | 0% | 0% |
 
-100 episode 评估，single object = `yellow_cylinder`，target zone = `zone_yellow (-0.15, 0.0)`。
+### 演示视频（demos_videos/）
+
+| 视频 | 内容 |
+|------|------|
+| [bc_alone_blue_cube_lift1.mp4](demos_videos/bc_alone_blue_cube_lift1.mp4) | BC actor 在全场景下抓 cube |
+| [bc_alone_blue_cube_lift2.mp4](demos_videos/bc_alone_blue_cube_lift2.mp4) | 另一角度成功 lift |
+| [bc_alone_blue_cube_lift3.mp4](demos_videos/bc_alone_blue_cube_lift3.mp4) | 第三个 lift case |
+| [v10_sac_curriculum_yellow_placed.mp4](demos_videos/v10_sac_curriculum_yellow_placed.mp4) | SAC 课程化下完整 pick-and-place |
+| [v10_sac_zero_shot_full_placed.mp4](demos_videos/v10_sac_zero_shot_full_placed.mp4) | SAC zero-shot 全场景偶发成功 |
+
+详细迭代过程：[实验日志.md](实验日志.md)（含 v1-v11 SAC + v1-v9 expert + BC + SACfD 全部攻防战）。
 
 ## 目录结构
 
@@ -122,8 +136,43 @@ Penalties：step -0.01、action -0.001‖a‖²、OOB -10。
 
 ## 当前限制 / 下一步
 
-- **placed 47%（训练分布）/ 9%（zero-shot 全场景）** —— 离 production-ready 还有距离
-- **stage 2.5+ (radius ≥ 0.20) 难学** —— SAC + reward shaping 在长 horizon transport 上撞墙
-- **下一步候选**：
-  - **B. HER (Hindsight Experience Replay)** —— sparse reward 长 horizon 经典解
-  - **C. BC pretrain + SAC fine-tune** —— manipulation 工业标准做法（前提：先把 expert.py 调到 ≥ 50% placed）
+- **placed 47%（训练分布）/ 9%（zero-shot 全场景）** —— 纯 SAC 路线极限
+- **BC alone lift 80%（最难场景）** —— 但学不到 placed（局部 imitation）
+- **SACfD（BC + SAC fine-tune）失败** —— critic 随机初始化，几千步内洗掉 BC
+
+### 已验证可行 / 不可行
+
+| 方案 | 状态 |
+|------|------|
+| 反向课程 SAC | ✓ placed 47%（受限场景） |
+| Expert 几何调试 | ✓ placed 20% (30 ep, blue_cube) |
+| BC pretrain | ✓ lift 80%, placed 0%（局限） |
+| SACfD naive | ✗ actor 被随机 critic 洗 |
+| SACfD with lr/10 | ✗ 同样被洗 |
+
+### 未实施的下一步
+
+- **Critic-only warmup**：用 demo offline 训 critic 数千步再放 actor（最有希望）
+- **AWAC / IQL**：BC + RL 的 SOTA，actor loss 加 BC regularization
+- **Multi-object expert**：调 yellow/red/green 的 GRIP_CLOSE_ACTION 收集多物体 demo
+
+## BC 路线复现
+
+```bash
+# 1. 收集 50 个 placed demo（4 worker 并行，~3 hours）
+python collect_demos.py --target blue_cube --n-success 50 --n-workers 4
+
+# 2. BC pretrain (50 epochs, ~30 sec)
+python bc_pretrain.py --demos demos/blue_cube_v9.npz \
+    --target blue_cube --epochs 50 --out checkpoints/bc_blue_cube
+
+# 3. eval BC alone（lift 80% / placed 0%）
+python eval.py --ckpt checkpoints/bc_blue_cube/policy.zip \
+    --target blue_cube --episodes 30 --render
+
+# 4. (可选) SACfD fine-tune —— 当前会洗掉 BC，待 critic warmup 修复
+python train_sac.py --target blue_cube --total-timesteps 50000 --n-envs 8 \
+    --load-from checkpoints/bc_blue_cube/policy.zip \
+    --load-demos demos/blue_cube_v9.npz \
+    --lr 3e-5 --run-name m1_sacfd
+```
