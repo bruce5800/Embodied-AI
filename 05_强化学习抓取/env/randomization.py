@@ -72,8 +72,11 @@ def randomize_objects(
     if target_override is not None:
         cx, cy = target_override["center"][:2]
         r = float(target_override["radius"])
-        x = float(cx + np_random.uniform(-r, r))
-        y = float(cy + np_random.uniform(-r, r))
+        # 课程化范围 clip 到全场景 RANDOM_X/Y_RANGE 内，避免 obj 跑到工作空间外
+        x = float(np.clip(cx + np_random.uniform(-r, r),
+                          RANDOM_X_RANGE[0], RANDOM_X_RANGE[1]))
+        y = float(np.clip(cy + np_random.uniform(-r, r),
+                          RANDOM_Y_RANGE[0], RANDOM_Y_RANGE[1]))
         yaw = float(np_random.uniform(0.0, 2.0 * np.pi))
         _set_object_pose(model, data, target_override["name"], x, y, 0.05, yaw)
 
