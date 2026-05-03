@@ -45,14 +45,15 @@ def save_video(frames, path, fps=30):
 #   → site z = X 时，gripper finger 末端 z = X - 0.065
 # 所以要让 gripper 末端在物体顶部（z=obj_z+物体半径），site 必须在物体中心上方 ≈ 7-8cm
 PRE_GRASP_HEIGHT = 0.10
-GRASP_Z_OFFSET = 0.06
-                                           # → gripper finger 末端在物体中心 + 0.005
-                                           # 之前 0.02 让 gripper 末端在地下 4.5cm，挤飞物体
+# debug 数据 (cube 中心 z=0.025, FF + GG 双 finger min):
+#   site_z=0.10 → finger min +0.013 (cube 内, 不穿地, 实测 lifted 33%)
+#   site_z=0.15 → finger min +0.038 (cube 顶上方 1.2cm, 实测 lifted 3% — finger 太高)
+# 选 site_z=0.10: 让 finger 末端在 cube 中段，但 anti_underground 阈值=0.005
+# 仍能保证不穿地。XY 精度由 closed-loop solve_ik_finger_target 处理
+GRASP_Z_OFFSET = 0.075
 LIFT_HEIGHT = 0.20
-GRASP_XY_OFFSET = np.array([0.02, -0.02])  # 04 GRASP_OFFSET 的 xy 投影
-PLACE_HEIGHT_LOW = 0.04                    # release 时 site 离 zone 4cm
-                                           # 用户视频反馈穿地仍在，说明 6.5cm 估算偏小
-                                           # release 用更低高度：finger 离 zone 更近，物体不会滚远
+GRASP_XY_OFFSET = np.array([0.0, 0.0])     # XY offset 由 closed-loop IK 自动校准，不需要静态值
+PLACE_HEIGHT_LOW = 0.10
 
 # ─── IK ───
 IK_MAX_ITER = 200
@@ -67,9 +68,10 @@ GOTO_TOL = 0.025
 # 增加 GRIP_HOLD 让 gripper 充分关闭 + 物体稳定后再抬起
 GRIP_HOLD_STEPS = 50        # 20 → 50
 
-# v3 实测：GRIP_CLOSE -0.6 比 -0.4 close 失败更多（11 vs 7）。-0.4 (ctrl ≈ -3°) 是
-# 最稳的配置——温和闭合，物体不被推开
-GRIP_CLOSE_ACTION = -0.1
+# v7 用户反馈："夹太紧把物体挤出"——靠高 friction (5.0) 维持抓握，闭合不需要太紧
+# 旧 -0.4 (ctrl ≈ -4.5°) 在低摩擦时合理；高摩擦下应放松到 -0.2 (ctrl ≈ +9°)
+# finger 半开 + 高摩擦 = 接触面"粘"住物体，不挤压
+GRIP_CLOSE_ACTION = -0.2
 GRIP_OPEN_ACTION = 1.0
 
 # v3 抬起阶段慢慢来：抬起前先让物体稳定几十步
@@ -87,9 +89,104 @@ TARGET_QUAT = np.array([1.0, 0.0, 0.0, 0.0])
 #   "6dof_weighted" — POS+ROT 加权 6-DOF（实测：5 DOF 数学限制让 pos 变差）
 # 当前选 3dof_full + 收紧 GRASP_OFFSET，依靠 collision groups 修复 (arm.ca=5)
 # 阻止 arm 穿地板，让 gripper 必须从合理姿态接触物体
-IK_MODE = "3dof_full"
+# finger_target: 闭环 IK，让 finger 张口中心精确对准 target xy
+# 解决 site→finger xy 偏差问题（IK 多解性下，site 在 cube 上方但 finger center 可能偏 4cm）
+IK_MODE = "finger_target"
 POS_WEIGHT = 1.0
 ROT_WEIGHT = 0.0
+
+
+def solve_ik_constrained_pitch(model, init_qpos, target_pos):
+    """3-DOF IK with joint4 自动跟随 = 保证 gripper 朝下姿态。
+
+    SO-100 几何：world EE pitch = joint2 + joint3 + joint4
+    ready 姿态: -0.8 + 0.5 + 0.3 = 0.0 (gripper 完美朝下)
+
+    约束 joint4 = -joint2 - joint3 让总 pitch 始终 = 0：
+      EE 不论移到哪里，gripper 都保持朝下
+    joint5 锁定 = ready 值（绕 z 轴 wrist rotation 不影响朝下）
+
+    自由度：joint1 (base 旋转) + joint2 + joint3 = 3-DOF
+    目标：3 pos = 完美匹配，无 over-constraint
+    """
+    site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "end_effector")
+    target = np.asarray(target_pos, dtype=np.float64)
+    eye3 = np.eye(3)
+
+    K_pitch = READY_JOINTS[1] + READY_JOINTS[2] + READY_JOINTS[3]  # = 0
+    locked_q5 = float(READY_JOINTS[4])
+
+    def constrain_pitch(qpos):
+        """强制 joint4 = K_pitch - joint2 - joint3，clip 到 range。"""
+        q4_target = K_pitch - qpos[1] - qpos[2]
+        lo, hi = model.jnt_range[3]
+        qpos[3] = np.clip(q4_target, lo, hi)
+        qpos[4] = locked_q5
+        return qpos
+
+    best_q = None
+    best_err = float("inf")
+
+    for attempt in range(IK_NUM_ATTEMPTS):
+        ik_data = mujoco.MjData(model)
+        ik_data.qpos[:] = init_qpos[:]
+
+        if attempt == 1:
+            ik_data.qpos[:N_ARM_JOINTS] = READY_JOINTS
+        elif attempt > 1:
+            for j in [0, 1, 2]:
+                lo, hi = model.jnt_range[j]
+                ik_data.qpos[j] = np.random.uniform(lo, hi)
+        constrain_pitch(ik_data.qpos)
+
+        for _ in range(IK_MAX_ITER):
+            mujoco.mj_forward(model, ik_data)
+            err = target - ik_data.site_xpos[site_id]
+            if np.linalg.norm(err) < IK_TOL:
+                break
+
+            jacp = np.zeros((3, model.nv))
+            mujoco.mj_jacSite(model, ik_data, jacp, None, site_id)
+            # 链式法则: dq4 = -dq2 - dq3，所以等效雅可比:
+            #   J_eff[:, 0] = J[:, 0]                (joint1 独立)
+            #   J_eff[:, 1] = J[:, 1] - J[:, 3]      (joint2 增加 + joint4 减少同等)
+            #   J_eff[:, 2] = J[:, 2] - J[:, 3]      (joint3 同理)
+            J = jacp[:, :N_ARM_JOINTS]
+            J_eff = np.column_stack([
+                J[:, 0],
+                J[:, 1] - J[:, 3],
+                J[:, 2] - J[:, 3],
+            ])
+
+            try:
+                dq3 = J_eff.T @ np.linalg.solve(
+                    J_eff @ J_eff.T + IK_DAMPING**2 * eye3, err
+                )
+            except np.linalg.LinAlgError:
+                break
+
+            scale = float(np.max(np.abs(dq3)))
+            if scale > 0.1:
+                dq3 *= 0.1 / scale
+
+            ik_data.qpos[0] += dq3[0]
+            ik_data.qpos[1] += dq3[1]
+            ik_data.qpos[2] += dq3[2]
+
+            for j in range(3):
+                lo, hi = model.jnt_range[j]
+                ik_data.qpos[j] = np.clip(ik_data.qpos[j], lo, hi)
+            constrain_pitch(ik_data.qpos)
+
+        mujoco.mj_forward(model, ik_data)
+        final_err = float(np.linalg.norm(target - ik_data.site_xpos[site_id]))
+        if final_err < best_err:
+            best_err = final_err
+            best_q = ik_data.qpos[:N_ARM_JOINTS].copy()
+        if best_err < IK_TOL:
+            break
+
+    return best_q, best_err
 
 
 def solve_ik_locked_wrist(model, init_qpos, target_pos):
@@ -160,6 +257,161 @@ def solve_ik_locked_wrist(model, init_qpos, target_pos):
             break
 
     return best_q, best_err
+
+
+def _compute_finger_center_xy(model, data):
+    """两 finger 几何 mean xy = 张口中心。"""
+    centers = []
+    for gn in ("link5_geom", "gripper_geom"):
+        gid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, gn)
+        mn = "f_mesh" if gn == "link5_geom" else "g_mesh"
+        mid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_MESH, mn)
+        v_start = model.mesh_vertadr[mid]
+        v_count = model.mesh_vertnum[mid]
+        verts = model.mesh_vert[v_start:v_start + v_count]
+        gp = data.geom_xpos[gid]
+        gm = data.geom_xmat[gid].reshape(3, 3)
+        vw = (gm @ verts.T).T + gp
+        centers.append(vw[:, :2].mean(axis=0))
+    return (centers[0] + centers[1]) / 2
+
+
+def solve_ik_finger_target(model, init_qpos, target_xyz, max_correction=3):
+    """闭环迭代 IK：让 finger 张口中心 xy 对准 target_xyz[:2]。
+
+    SO-100 的 site 不在 finger 张口中心 + IK 多解性导致 site→finger 偏差
+    随姿态变化（实测 dx 范围 -0.044~+0.030）。统一 offset 校准不够。
+    用闭环：每次 IK 后算 finger center，跟 target 比较，调整 site target，再 IK。
+    """
+    site_target = np.array(target_xyz, dtype=np.float64).copy()
+    target_xy = np.array(target_xyz[:2], dtype=np.float64)
+    best_q = None
+    best_err = float("inf")
+
+    for trial in range(max_correction):
+        target_q, err = solve_ik_anti_underground(
+            model, init_qpos, site_target, num_attempts=15)
+        if target_q is None:
+            return best_q, best_err
+
+        # 算这个解的 finger center xy
+        td = mujoco.MjData(model)
+        td.qpos[:N_ARM_JOINTS] = target_q
+        mujoco.mj_forward(model, td)
+        finger_xy = _compute_finger_center_xy(model, td)
+
+        offset = target_xy - finger_xy   # 想 finger 移动这么多
+        finger_err = float(np.linalg.norm(offset))
+
+        # 收敛判断：finger center 到 target 距离 < 5mm
+        if finger_err < best_err:
+            best_err = finger_err
+            best_q = target_q
+
+        if finger_err < 0.005:
+            return target_q, finger_err
+
+        # 修正 site target：朝 offset 反方向移（因为 site 跟 finger 偏差固定）
+        site_target[0] += offset[0]
+        site_target[1] += offset[1]
+
+    return best_q, best_err
+
+
+def solve_ik_anti_underground(model, init_qpos, target_pos, num_attempts=20):
+    """3-DOF IK 多重启 + 选"两侧 finger 都不穿地"的解。
+
+    SO-100 5 DOF + 3 pos 约束 = 2 DOF nullspace（多解）。每次随机重启可能得到
+    不同姿态：gripper 朝下 / 朝侧 / 朝下穿地。
+
+    关键：SO-100 gripper 有两个 jaw：
+      - link5_geom (FF.stl)：固定半侧
+      - gripper_geom (GG.stl)：活动半侧（绕 joint6 开合）
+    必须两个都不穿地。用 max(min(FF.z), min(GG.z)) 评分。
+    """
+    site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "end_effector")
+
+    # 收集两侧 finger 的 mesh 顶点
+    finger_geoms = []  # list of (geom_id, verts_local)
+    for geom_name, mesh_name in [("link5_geom", "f_mesh"),
+                                  ("gripper_geom", "g_mesh")]:
+        gid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
+        mid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_MESH, mesh_name)
+        if gid >= 0 and mid >= 0:
+            v_start = model.mesh_vertadr[mid]
+            v_count = model.mesh_vertnum[mid]
+            verts = model.mesh_vert[v_start:v_start + v_count].copy()
+            finger_geoms.append((gid, verts))
+
+    target = np.asarray(target_pos, dtype=np.float64)
+    eye3 = np.eye(3)
+
+    candidates = []  # 收集所有可达的解：(qpos[:5], pos_err, grip_z_min)
+
+    for attempt in range(num_attempts):
+        ik_data = mujoco.MjData(model)
+        ik_data.qpos[:] = init_qpos[:]
+        if attempt == 1:
+            ik_data.qpos[:N_ARM_JOINTS] = READY_JOINTS
+        elif attempt > 1:
+            for j in range(N_ARM_JOINTS):
+                lo, hi = model.jnt_range[j]
+                ik_data.qpos[j] = np.random.uniform(lo, hi)
+
+        for _ in range(IK_MAX_ITER):
+            mujoco.mj_forward(model, ik_data)
+            err = target - ik_data.site_xpos[site_id]
+            if np.linalg.norm(err) < IK_TOL:
+                break
+            jacp = np.zeros((3, model.nv))
+            mujoco.mj_jacSite(model, ik_data, jacp, None, site_id)
+            J = jacp[:, :N_ARM_JOINTS]
+            try:
+                dq = J.T @ np.linalg.solve(
+                    J @ J.T + IK_DAMPING**2 * eye3, err
+                )
+            except np.linalg.LinAlgError:
+                break
+            scale = float(np.max(np.abs(dq)))
+            if scale > 0.1:
+                dq *= 0.1 / scale
+            ik_data.qpos[:N_ARM_JOINTS] += dq
+            for j in range(N_ARM_JOINTS):
+                lo, hi = model.jnt_range[j]
+                ik_data.qpos[j] = np.clip(ik_data.qpos[j], lo, hi)
+
+        mujoco.mj_forward(model, ik_data)
+        pos_err = float(np.linalg.norm(target - ik_data.site_xpos[site_id]))
+        if pos_err > 0.02:
+            continue
+
+        # 评分：两侧 finger 中**最低的 z_min**（越高越好，> 0 表示两侧都不穿地）
+        finger_z_min = float("inf")
+        for gid, verts in finger_geoms:
+            g_pos = ik_data.geom_xpos[gid]
+            g_mat = ik_data.geom_xmat[gid].reshape(3, 3)
+            v_world = (g_mat @ verts.T).T + g_pos
+            finger_z_min = min(finger_z_min, float(v_world[:, 2].min()))
+
+        candidates.append((
+            ik_data.qpos[:N_ARM_JOINTS].copy(),
+            pos_err,
+            finger_z_min,
+        ))
+
+    if not candidates:
+        return None, float("inf")
+
+    # 优选：finger 明显高于地面（z_min ≥ 0.005，5mm 安全余量），按 pos_err 排序
+    # v3 收紧阈值：从 -0.005 (允许 5mm 穿) 改到 +0.005（必须 5mm 离地）
+    not_underground = [c for c in candidates if c[2] >= 0.005]
+    if not_underground:
+        not_underground.sort(key=lambda c: c[1])  # pos_err 升序
+        return not_underground[0][0], not_underground[0][1]
+    else:
+        # 全穿地：选最高的（z_min 最大）
+        candidates.sort(key=lambda c: -c[2])
+        return candidates[0][0], candidates[0][1]
 
 
 def solve_ik_multistart(model, init_qpos, target_pos):
@@ -278,10 +530,22 @@ def run_episode(env, seed, verbose=False, record_frames=False):
             frames.append(env.render())
 
     def goto(target_pos, gripper_open, label):
-        """循环走到 target_pos。"""
+        """循环走到 target_pos。
+
+        IK_MODE=='finger_target' 下检查 finger center xy + EE z 距离 target。
+        其他模式检查 EE site 距离 target。
+        """
+        target_xy = np.asarray(target_pos[:2], dtype=np.float64)
+        target_z = float(target_pos[2])
         for _ in range(PHASE_MAX_ITERS):
             data = env._data
-            if IK_MODE == "3dof_locked":
+            if IK_MODE == "finger_target":
+                target_q, _ = solve_ik_finger_target(env._model, data.qpos, target_pos)
+            elif IK_MODE == "anti_underground":
+                target_q, _ = solve_ik_anti_underground(env._model, data.qpos, target_pos)
+            elif IK_MODE == "constrained_pitch":
+                target_q, _ = solve_ik_constrained_pitch(env._model, data.qpos, target_pos)
+            elif IK_MODE == "3dof_locked":
                 target_q, _ = solve_ik_locked_wrist(env._model, data.qpos, target_pos)
             else:
                 target_q, _ = solve_ik_multistart(env._model, data.qpos, target_pos)
@@ -293,9 +557,21 @@ def run_episode(env, seed, verbose=False, record_frames=False):
             _maybe_record()
             state["ever_lifted"] = (state["ever_lifted"]
                                     or state["info"].get("lifted", False))
-            ee = state["info"]["ee_pos"]
-            if np.linalg.norm(ee - target_pos) < GOTO_TOL:
-                return True
+
+            # 收敛判断：finger_target 模式下检查 finger center xy + ee z
+            if IK_MODE == "finger_target":
+                mujoco.mj_forward(env._model, env._data)
+                finger_xy = _compute_finger_center_xy(env._model, env._data)
+                ee = state["info"]["ee_pos"]
+                err_xy = float(np.linalg.norm(finger_xy - target_xy))
+                err_z = abs(ee[2] - target_z)
+                if err_xy < GOTO_TOL and err_z < GOTO_TOL:
+                    return True
+            else:
+                ee = state["info"]["ee_pos"]
+                if np.linalg.norm(ee - target_pos) < GOTO_TOL:
+                    return True
+
             if state["term"] or state["trunc"]:
                 return False
         return False  # 超时
