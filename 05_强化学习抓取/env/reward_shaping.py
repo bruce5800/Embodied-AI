@@ -75,6 +75,7 @@ def compute_reward(
     action: np.ndarray,
     first_lift_pending: bool,
     first_near_target_pending: bool,
+    ever_lifted: bool,
 ):
     """
     单步 reward 计算。
@@ -111,7 +112,14 @@ def compute_reward(
     d_obj_tgt_xy = float(np.linalg.norm(obj_pos[:2] - target_pos[:2]))
 
     # ── 终止 / OOB 判定 ──
-    placed = (d_obj_tgt_xy < SUCCESS_RADIUS) and (obj_z < PLACED_Z_MAX)
+    # v7 修：placed 必须 episode 内曾经 lift 过 —— 堵住"推杆刷分"漏洞
+    # （v6 诊断显示 agent 学会用 gripper 推物体到 zone，从不抬起：
+    #   placed 14%, held 0%, final obj_z 0.025m 这种数学不可能事件）
+    placed = (
+        ever_lifted
+        and (d_obj_tgt_xy < SUCCESS_RADIUS)
+        and (obj_z < PLACED_Z_MAX)
+    )
     oob = bool(
         obj_pos[0] < OBJ_OOB_LOW[0] or obj_pos[0] > OBJ_OOB_HIGH[0] or
         obj_pos[1] < OBJ_OOB_LOW[1] or obj_pos[1] > OBJ_OOB_HIGH[1]

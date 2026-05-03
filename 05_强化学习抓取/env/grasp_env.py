@@ -113,6 +113,7 @@ class GraspEnv(gym.Env):
         self._target_zone_pos = np.zeros(3)
         self._first_lift_pending = True  # episode 内是否还没发过 first_lift bonus
         self._first_near_pending = True  # 是否还没发过 first_near_target bonus
+        self._ever_lifted = False        # episode 内是否曾经 lift 过（堵推杆 hack）
 
         # ── gym spaces ──
         # 6 dim：5 关节增量 + 1 夹爪
@@ -171,6 +172,7 @@ class GraspEnv(gym.Env):
         self._steps = 0
         self._first_lift_pending = True
         self._first_near_pending = True
+        self._ever_lifted = False
         return self._build_obs(), self._build_info_reset()
 
     def step(self, action):
@@ -207,7 +209,11 @@ class GraspEnv(gym.Env):
             action=action,
             first_lift_pending=self._first_lift_pending,
             first_near_target_pending=self._first_near_pending,
+            ever_lifted=self._ever_lifted,
         )
+        # episode 状态更新：lift 过的标志一次置 True 不再翻回
+        if rew_info.get("lifted", False):
+            self._ever_lifted = True
         # 一次性 milestone bonus 已发，关闭 flag
         if rew_info.get("first_lift_consumed", False):
             self._first_lift_pending = False
