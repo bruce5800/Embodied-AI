@@ -39,7 +39,10 @@ W_LIFT_LINEAR = 5.0
 W_HELD_BASELINE = 0.5
 W_OVERLIFT = 0.5
 # v6 回滚：v5 的 W_TRANSPORT=3 让 agent 急冲撞飞物体（OOB 30%），回到 1.0
-W_TRANSPORT = 1.0
+W_TRANSPORT = 1.0          # 势能项：-W_TRANSPORT * d_obj_tgt_xy（保留作 phase B baseline）
+# v10 加：progress reward —— 物体每步靠近 zone 多少（势能差），强化"运送"信号
+# stage 2.5 (r=0.20) 退步暴露 transport 势能不够：agent 不知道"朝 zone 移动"是好的
+W_PROGRESS = 10.0          # held 时每米靠近给 +10 reward，远离时 0（不罚，避免抖动）
 R_FIRST_LIFT_BONUS = 20.0
 # v6 回滚：v5 的 R_FIRST_NEAR_TARGET=15 reward 跳跃太大让 critic 学崩，
 # 缩到 5.0 当温和 milestone
@@ -60,6 +63,7 @@ class RewardBreakdown:
     first_lift_bonus: float
     held_baseline: float
     transport: float
+    progress: float
     first_near_target_bonus: float
     overlift_penalty: float
     placed_bonus: float
@@ -81,6 +85,7 @@ def compute_reward(
     first_lift_pending: bool,
     first_near_target_pending: bool,
     ever_lifted: bool,
+    prev_d_obj_tgt: float,
 ):
     """
     单步 reward 计算。
@@ -150,6 +155,7 @@ def compute_reward(
         first_lift_bonus = R_FIRST_LIFT_BONUS
         first_lift_consumed = True
 
+    progress = 0.0
     if not held:
         # 阶段 A：接近 + 抬起。reach 加 clip 防极端值
         reach = -min(d_ee_obj, W_REACH_CLIP)
@@ -158,6 +164,9 @@ def compute_reward(
         # 阶段 B：保持抓握并运送到目标区
         held_baseline = W_HELD_BASELINE
         transport = -W_TRANSPORT * d_obj_tgt_xy
+        # progress reward：朝 zone 靠近时给奖励（远离时不罚，避免抖动 hack）
+        delta = prev_d_obj_tgt - d_obj_tgt_xy   # > 0 = 靠近
+        progress = W_PROGRESS * max(0.0, delta)
         overlift_penalty = -W_OVERLIFT * max(0.0, obj_z - LIFT_TARGET_Z)
 
     # 一次性首次靠近目标 bonus（必须 held 状态下，并且 xy 距 < NEAR_TARGET_RADIUS）
@@ -173,7 +182,7 @@ def compute_reward(
 
     total = (action_penalty + step_penalty
              + reach + lift_linear + first_lift_bonus
-             + held_baseline + transport + first_near_target_bonus
+             + held_baseline + transport + progress + first_near_target_bonus
              + overlift_penalty
              + placed_bonus + oob_penalty)
 
@@ -185,6 +194,7 @@ def compute_reward(
         first_lift_bonus=first_lift_bonus,
         held_baseline=held_baseline,
         transport=transport,
+        progress=progress,
         first_near_target_bonus=first_near_target_bonus,
         overlift_penalty=overlift_penalty,
         placed_bonus=placed_bonus,
@@ -201,6 +211,7 @@ def compute_reward(
         "oob": oob,
         "d_ee_obj": d_ee_obj,
         "d_obj_tgt": d_obj_tgt_xy,
+        "d_obj_tgt_for_next": d_obj_tgt_xy,  # env 用作下一步的 prev_d_obj_tgt
         "obj_z": obj_z,
         "first_lift_consumed": first_lift_consumed,
         "first_near_consumed": first_near_consumed,

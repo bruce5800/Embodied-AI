@@ -119,6 +119,7 @@ class GraspEnv(gym.Env):
         self._first_lift_pending = True  # episode 内是否还没发过 first_lift bonus
         self._first_near_pending = True  # 是否还没发过 first_near_target bonus
         self._ever_lifted = False        # episode 内是否曾经 lift 过（堵推杆 hack）
+        self._prev_d_obj_tgt = 0.0       # 上一步物体到 zone xy 距离（用于 progress reward）
 
         # ── gym spaces ──
         # 6 dim：5 关节增量 + 1 夹爪
@@ -192,6 +193,9 @@ class GraspEnv(gym.Env):
         self._first_lift_pending = True
         self._first_near_pending = True
         self._ever_lifted = False
+        # 初始化 prev_d_obj_tgt（progress reward 第一步无意义，给当前距离让 delta=0）
+        obj_xy = self._data.xpos[self._target_body_id][:2]
+        self._prev_d_obj_tgt = float(np.linalg.norm(obj_xy - self._target_zone_pos[:2]))
         return self._build_obs(), self._build_info_reset()
 
     def step(self, action):
@@ -229,7 +233,10 @@ class GraspEnv(gym.Env):
             first_lift_pending=self._first_lift_pending,
             first_near_target_pending=self._first_near_pending,
             ever_lifted=self._ever_lifted,
+            prev_d_obj_tgt=self._prev_d_obj_tgt,
         )
+        # 更新 prev_d_obj_tgt 给下一步 progress 计算用
+        self._prev_d_obj_tgt = rew_info["d_obj_tgt_for_next"]
         # episode 状态更新：lift 过的标志一次置 True 不再翻回
         if rew_info.get("lifted", False):
             self._ever_lifted = True
