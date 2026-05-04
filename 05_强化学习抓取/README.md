@@ -6,26 +6,47 @@
 
 ## 当前最佳成果
 
-### 两条路线对比
+### 真实可用成果：SAC 课程化（v10 stage 2）
 
-| 路线 | 最佳 ckpt | 评估场景 | placed | lift |
-|------|---------|---------|--------|------|
-| **SAC + 课程化** | `checkpoints/m1_yellow_s2_v3_buf/best_model.zip` | yellow_cylinder, r=0.10 | **47%** | 53% |
-| 同上 | 同 | yellow_cylinder, full table | 9% | 23% |
-| **BC alone (50 demos)** | `checkpoints/bc_blue_cube/policy.zip` | blue_cube, full table | 0% | **80%** |
-| BC + SACfD（fine-tune 失败） | _-_ | _-_ | 0% | 0% |
+`checkpoints/m1_yellow_s2_v3_buf/best_model.zip` — 800k step 训练。
+
+**严格诊断 50 ep（v10 训练时 env，不含 friction softening）**：
+
+| 指标 | 数据 | 含义 |
+|------|------|------|
+| placed (in zone) | 40% | 物体在目标区（含假阳性） |
+| **stably_held** (≥10 步连续 held) | **40%** | **真持续抓握** |
+| **placed_via_held**（先 stably_held 再 placed） | **34%** | **真"抓-放"完整流程** |
+| held_run_max 平均 | 29.5 步 | 平均握 30 步（持续抓取） |
+| placed - placed_via_held = 6% | "推/捞 hack" | 没真抓但物体到 zone（少数偶发） |
+
+> ⚠️ 之前 `eval_final.py` 报的 47% 是**老 env（不含 friction softening）下的数字**——但中间为了 expert/BC 调试加了 friction，env 不一致让 ckpt 表现下降。现在 env 加了 `soften_contacts=False` 默认参数恢复 v10 训练 env，**真实成果是 placed_via_held 34%**。
 
 ### 演示视频（demos_videos/）
 
 | 视频 | 内容 |
 |------|------|
-| [bc_alone_blue_cube_lift1.mp4](demos_videos/bc_alone_blue_cube_lift1.mp4) | BC actor 在全场景下抓 cube |
-| [bc_alone_blue_cube_lift2.mp4](demos_videos/bc_alone_blue_cube_lift2.mp4) | 另一角度成功 lift |
-| [bc_alone_blue_cube_lift3.mp4](demos_videos/bc_alone_blue_cube_lift3.mp4) | 第三个 lift case |
-| [v10_sac_curriculum_yellow_placed.mp4](demos_videos/v10_sac_curriculum_yellow_placed.mp4) | SAC 课程化下完整 pick-and-place |
-| [v10_sac_zero_shot_full_placed.mp4](demos_videos/v10_sac_zero_shot_full_placed.mp4) | SAC zero-shot 全场景偶发成功 |
+| [v10_real_grasp_yellow_1_seed10001.mp4](demos_videos/v10_real_grasp_yellow_1_seed10001.mp4) | **真"抓-放"成功**：连续 ≥10 步抓握 + 放到 zone |
+| [v10_real_grasp_yellow_2_seed10002.mp4](demos_videos/v10_real_grasp_yellow_2_seed10002.mp4) | 同上，第二例 |
+| [v10_real_grasp_yellow_3_seed10006.mp4](demos_videos/v10_real_grasp_yellow_3_seed10006.mp4) | 同上，第三例 |
+| [v10_push_hack_yellow_1_seed10015.mp4](demos_videos/v10_push_hack_yellow_1_seed10015.mp4) | **反例对比**：placed=True 但**没真抓握** —— 用机械臂"捞"物体到 zone |
 
-详细迭代过程：[实验日志.md](实验日志.md)（含 v1-v11 SAC + v1-v9 expert + BC + SACfD 全部攻防战）。
+### 探索失败的路线（但有经验积累）
+
+| 路线 | 真实结果 | 失败原因 |
+|------|---------|---------|
+| BC alone (50 demos) | placed 0%, **真抓 0%** | unimodal Gaussian + 50 demos 学不到 piecewise sequential 行为；MSE/likelihood 都 mode collapse 到"gripper 永远开" |
+| BC v4 (close ×3 weight) | placed 0%, tried_close 30% | actor 学到闭爪但 timing 错位 |
+| BC + SACfD (naive / gentle) | actor 被洗 | 随机 critic 让 SAC update 把 BC 行为冲掉 |
+
+> ⚠️ **关于 `info["lifted"]` 假信号**：之前 BC 评估的 lift_rate 80% **不是真抓取** —— `lifted` 仅判 `obj_z>6cm` 不区分"被夹住举起"vs"张开 gripper 推过 6cm 瞬间"。**真实抓取必须看 `held`（contact AND closing AND lifted 同时为真）**。BC 路线 `held=0%`。
+
+### 演示视频（demos_videos/）
+
+| 视频 | 内容 |
+|------|------|
+| [v10_sac_curriculum_yellow_placed.mp4](demos_videos/v10_sac_curriculum_yellow_placed.mp4) | **SAC 课程化下完整 pick-and-place**（项目唯一真实成功演示） |
+| [v10_sac_zero_shot_full_placed.mp4](demos_videos/v10_sac_zero_shot_full_placed.mp4) | SAC zero-shot 全场景偶发成功（9% rate） |
 
 ## 目录结构
 

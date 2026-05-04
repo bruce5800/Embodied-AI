@@ -12,14 +12,26 @@
 | [04 自主决策与学习](04_自主决策与学习) | LLM 任务规划 + 脚本式抓取（本 README 主体内容） | ✓ |
 | **[05 强化学习抓取](05_强化学习抓取)** | **SAC 课程化训练 + Behavior Cloning，详见子目录** | **✓ 已完成** |
 
-### 阶段 05 关键成果速览
+### 阶段 05 关键成果
 
-| 路线 | 评估场景 | placed | lift | 视频 |
-|------|---------|--------|------|------|
-| SAC + 反向课程 | yellow_cylinder, ±10cm | **47%** | 53% | [05_/demos_videos/](05_强化学习抓取/demos_videos/v10_sac_curriculum_yellow_placed.mp4) |
-| BC + Expert demo | blue_cube, full table | 0% | **80%** | [05_/demos_videos/](05_强化学习抓取/demos_videos/bc_alone_blue_cube_lift1.mp4) |
+**SAC + 反向课程（v10 stage 2）—— 最严格判定**：
 
-详细见 [05_强化学习抓取/README.md](05_强化学习抓取/README.md) 与 [05_强化学习抓取/实验日志.md](05_强化学习抓取/实验日志.md)（v1-v11 SAC 调试 + v1-v9 expert 调试 + BC + SACfD 全流程）。
+| 指标 | 数据 |
+|------|------|
+| placed (in zone) | 40% |
+| **stably_held** (≥10 步连续真抓) | **40%** |
+| **placed_via_held**（真"抓-放"完整流程） | **34%** |
+| 假阳性"捞 hack"（placed 但没真抓） | 6% |
+
+演示视频：
+- [真"抓-放"成功](05_强化学习抓取/demos_videos/v10_real_grasp_yellow_1_seed10001.mp4) ×3 个
+- [反例：捞 hack](05_强化学习抓取/demos_videos/v10_push_hack_yellow_1_seed10015.mp4)（placed 但 actor 没真抓握）
+
+> ⚠️ 项目过程中发现 `info["lifted"]`/`info["held"]`/`info["placed"]` 都含**假阳性触发**——必须用 `stably_held` (≥10 步连续) + `placed_via_held` (先 stably_held 再 placed) 才能反映真实抓取能力。详见 [05_强化学习抓取/实验日志.md](05_强化学习抓取/实验日志.md)。
+
+**BC + Expert demo 路线**：探索失败（actor mode collapse + SAC fine-tune 洗 actor），但产生了 expert 几何调试日志和真伪判定方法学。
+
+完整记录见 [05_强化学习抓取/README.md](05_强化学习抓取/README.md) 和 [实验日志.md](05_强化学习抓取/实验日志.md)。
 
 ---
 

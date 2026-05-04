@@ -59,7 +59,13 @@ class GraspEnv(gym.Env):
         render_mode: Optional[str] = None,
         camera_name: str = "camera_front",
         curriculum_radius: Optional[float] = None,
+        soften_contacts: bool = False,
     ):
+        """
+        Args:
+            soften_contacts: True 时启用 friction=5.0 + soft contact（expert/BC 抓取需要）
+                False（默认）= v10 训练时的 env，硬接触 + 默认 friction (cube=2.0)
+        """
         super().__init__()
 
         if target_object is not None and target_object not in OBJECT_NAMES:
@@ -74,6 +80,8 @@ class GraspEnv(gym.Env):
         for i in range(N_ARM_JOINTS):
             self._model.actuator_gainprm[i, 0] *= KP_BOOST
             self._model.actuator_biasprm[i, 1] *= KP_BOOST
+        # 是否启用软接触 + 高摩擦（expert/BC 需要；SAC 评估应关闭以匹配训练 env）
+        self._soften_contacts = bool(soften_contacts)
         # ── 碰撞分组（这是 0% lift rate 的真因之一）──
         # 默认所有 geom contype/conaffinity=1，arm 的 link5/gripper 会撞地板，下不去。
         # 三组分组：
@@ -310,30 +318,24 @@ class GraspEnv(gym.Env):
                 m.geom_contype[gid] = 2
                 m.geom_conaffinity[gid] = 4
 
-        # ─── 软化物体接触 + 大幅提高摩擦（让 gripper "粘"住物体）─────────
-        # SO-100 gripper 是钩子状单边 finger，不是平行 jaw。物体陷在 gripper
-        # 中段（弯曲处），刚性接触下闭爪 → 几何挤压 → 物体被推出。
-        # 用户视频反馈："夹的时候滑出去了，位置偏了就更容易滑"
-        # 双管齐下：
-        # 1. 软化（solref/solimp）：让接触可压缩，物体微"陷入"gripper 几何
-        # 2. 大幅提高 friction：接触一发生就"咬"住，不滑
-        SOFT_SOLREF = np.array([0.04, 1.0])              # 原 [0.01, 0.5] 硬接触
-        SOFT_SOLIMP = np.array([0.6, 0.8, 0.005, 0.5, 2.0])  # 原 [0.9 0.95 0.001 0.5 2]
-        HIGH_FRICTION = np.array([5.0, 0.5, 0.1])        # 原 cube [2.0, 0.1, 0.01]
-
-        # 物体软化 + 高摩擦
-        for obj_name in OBJECT_NAMES:
-            gid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, f"{obj_name}_geom")
-            if gid >= 0:
-                m.geom_solref[gid] = SOFT_SOLREF
-                m.geom_solimp[gid][:5] = SOFT_SOLIMP
-                m.geom_friction[gid] = HIGH_FRICTION
-
-        # gripper finger 也加高摩擦
-        for name in ("link5_geom", "gripper_geom"):
-            gid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, name)
-            if gid >= 0:
-                m.geom_friction[gid] = HIGH_FRICTION
+        # ─── 软接触 + 高摩擦（仅 soften_contacts=True 时启用）────────
+        # 这是为了 expert/BC 抓取加的：钩子状 gripper + 刚体接触会让物体被挤出，
+        # 软化 + 高摩擦让 gripper 能"粘"住物体。
+        # 但 SAC v10 是在没有这些的 env 训的，关闭即可恢复 v10 训练 env。
+        if self._soften_contacts:
+            SOFT_SOLREF = np.array([0.04, 1.0])
+            SOFT_SOLIMP = np.array([0.6, 0.8, 0.005, 0.5, 2.0])
+            HIGH_FRICTION = np.array([5.0, 0.5, 0.1])
+            for obj_name in OBJECT_NAMES:
+                gid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, f"{obj_name}_geom")
+                if gid >= 0:
+                    m.geom_solref[gid] = SOFT_SOLREF
+                    m.geom_solimp[gid][:5] = SOFT_SOLIMP
+                    m.geom_friction[gid] = HIGH_FRICTION
+            for name in ("link5_geom", "gripper_geom"):
+                gid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, name)
+                if gid >= 0:
+                    m.geom_friction[gid] = HIGH_FRICTION
 
     def _check_grip_contact(self) -> bool:
         """gripper 几何对 target 物体几何，是否存在 mj_contact。"""

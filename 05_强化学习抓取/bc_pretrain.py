@@ -107,16 +107,18 @@ def main():
             batch_obs = obs_t[batch_idx]
             batch_act = action_t[batch_idx]
 
-            # SquashedDiagGaussianDistribution 的 actor:
-            #   get_action_dist_params 返回 (mean_actions, log_std, kwargs)
-            #   mean_actions 是 pre-tanh（unsquashed）
-            mean_actions, _log_std, _kwargs = actor.get_action_dist_params(batch_obs)
-            # expert action 在 [-1, 1]（很多饱和到 ±1）。tanh 在 ±1 处梯度趋 0，
-            # 直接 MSE on tanh(mean) 学不动饱和。改在 unsquashed 空间训：
-            # atanh expert action → 跟 mean_actions 比较
+            # Max-likelihood BC + sample weighting
+            # gripper close 样本（action[5] < 0）加权重 3x，强迫 actor 学到 conditional close
+            # 否则 50/50 open/close 分布让 unimodal Gaussian mode collapse 到 open
+            mean_actions, log_std, _kwargs = actor.get_action_dist_params(batch_obs)
+            actor.action_dist.proba_distribution(mean_actions, log_std)
             expert_clipped = torch.clamp(batch_act, -0.999, 0.999)
-            expert_pre_tanh = torch.atanh(expert_clipped)
-            loss = (mean_actions - expert_pre_tanh).pow(2).mean()
+            log_prob = actor.action_dist.log_prob(expert_clipped)   # shape (B,)
+
+            # close 样本（gripper expert action < 0）权重 3x
+            is_close = batch_act[:, 5] < 0
+            weights = torch.where(is_close, 3.0, 1.0)
+            loss = -(weights * log_prob).sum() / weights.sum()
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
