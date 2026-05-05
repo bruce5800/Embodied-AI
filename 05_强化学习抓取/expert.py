@@ -277,12 +277,17 @@ def _compute_finger_center_xy(model, data):
     return (centers[0] + centers[1]) / 2
 
 
-def solve_ik_finger_target(model, init_qpos, target_xyz, max_correction=3):
+def solve_ik_finger_target(model, init_qpos, target_xyz, max_correction=8,
+                            tol=0.002):
     """闭环迭代 IK：让 finger 张口中心 xy 对准 target_xyz[:2]。
 
     SO-100 的 site 不在 finger 张口中心 + IK 多解性导致 site→finger 偏差
     随姿态变化（实测 dx 范围 -0.044~+0.030）。统一 offset 校准不够。
     用闭环：每次 IK 后算 finger center，跟 target 比较，调整 site target，再 IK。
+
+    v2 严格化（用户反馈"抓偏"问题）：
+      max_correction 3→8（更多迭代收敛）
+      tol 5mm → 2mm（cube 5cm 边长，2mm 偏离 = 4% 偏离中心）
     """
     site_target = np.array(target_xyz, dtype=np.float64).copy()
     target_xy = np.array(target_xyz[:2], dtype=np.float64)
@@ -304,12 +309,12 @@ def solve_ik_finger_target(model, init_qpos, target_xyz, max_correction=3):
         offset = target_xy - finger_xy   # 想 finger 移动这么多
         finger_err = float(np.linalg.norm(offset))
 
-        # 收敛判断：finger center 到 target 距离 < 5mm
+        # 收敛判断
         if finger_err < best_err:
             best_err = finger_err
             best_q = target_q
 
-        if finger_err < 0.005:
+        if finger_err < tol:
             return target_q, finger_err
 
         # 修正 site target：朝 offset 反方向移（因为 site 跟 finger 偏差固定）
@@ -654,7 +659,7 @@ def main():
     target = None if args.target == "random" else args.target
     render_mode = "rgb_array" if args.render else None
     env = GraspEnv(target_object=target, max_episode_steps=args.max_episode_steps,
-                   render_mode=render_mode)
+                   render_mode=render_mode, soften_contacts=True)
 
     render_dir = Path(__file__).resolve().parent / "expert_renders"
     if args.render:

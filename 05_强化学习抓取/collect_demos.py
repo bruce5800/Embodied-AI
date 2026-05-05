@@ -76,6 +76,7 @@ def _collect_worker(args: dict) -> dict:
     env = GraspEnv(
         target_object=args["target"],
         max_episode_steps=args["max_steps"],
+        soften_contacts=True,    # expert 抓取必须软接触
     )
     rec_env = TransitionRecorder(env)
 
