@@ -1,4 +1,6 @@
 .DS_Store
+.vscode/
+.claude/
 base.pt
 yolo11n.pt
 __pycache__/
