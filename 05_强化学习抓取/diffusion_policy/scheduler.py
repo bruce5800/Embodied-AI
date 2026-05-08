@@ -82,6 +82,11 @@ class DDIMScheduler:
         # 从 noisy sample 反推 pred_a_0
         pred_a_0 = (sample - (1 - alpha_t).sqrt() * pred_noise) / alpha_t.sqrt()
 
+        # 关键：在 t 大时 α̅_t≈0，除法会让 pred_a_0 爆到几百。
+        # 真实 a_0 已 normalize 到 [-1, 1]，clip 后再重组。
+        # 这是 HuggingFace DDIMScheduler 默认 clip_sample=True 做的事，漏了 → 推理发散。
+        pred_a_0 = pred_a_0.clamp(-1.0, 1.0)
+
         # 重组 a_{prev_t}
         prev_sample = alpha_prev.sqrt() * pred_a_0 + (1 - alpha_prev).sqrt() * pred_noise
         return prev_sample

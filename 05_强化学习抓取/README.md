@@ -38,6 +38,7 @@
 | BC alone (50 demos) | placed 0%, **真抓 0%** | unimodal Gaussian + 50 demos 学不到 piecewise sequential 行为；MSE/likelihood 都 mode collapse 到"gripper 永远开" |
 | BC v4 (close ×3 weight) | placed 0%, tried_close 30% | actor 学到闭爪但 timing 错位 |
 | BC + SACfD (naive / gentle) | actor 被洗 | 随机 critic 让 SAC update 把 BC 行为冲掉 |
+| **Diffusion Policy** (164 demos, 150 epoch MPS) | placed 0%, **stably_held 12%, lifted 28%, contacted 94%** | DDIM `pred_a_0` 缺 clip → 推理发散到几百（已修）；修后能真抓 12%，但 chunk 全饱和 ±1 没法平滑 transport；本质仍是 BC + 164 demos 不够覆盖 transport 相位 |
 
 > ⚠️ **关于 `info["lifted"]` 假信号**：之前 BC 评估的 lift_rate 80% **不是真抓取** —— `lifted` 仅判 `obj_z>6cm` 不区分"被夹住举起"vs"张开 gripper 推过 6cm 瞬间"。**真实抓取必须看 `held`（contact AND closing AND lifted 同时为真）**。BC 路线 `held=0%`。
 
@@ -161,20 +162,29 @@ Penalties：step -0.01、action -0.001‖a‖²、OOB -10。
 - **BC alone lift 80%（最难场景）** —— 但学不到 placed（局部 imitation）
 - **SACfD（BC + SAC fine-tune）失败** —— critic 随机初始化，几千步内洗掉 BC
 
-### 已验证可行 / 不可行
+### 4 路线最终对比（严格 metrics: stably_held + placed_via_held）
 
-| 方案 | 状态 |
-|------|------|
-| 反向课程 SAC | ✓ placed 47%（受限场景） |
-| Expert 几何调试 | ✓ placed 20% (30 ep, blue_cube) |
-| BC pretrain | ✓ lift 80%, placed 0%（局限） |
-| SACfD naive | ✗ actor 被随机 critic 洗 |
-| SACfD with lr/10 | ✗ 同样被洗 |
+| 路线 | placed | stably_held | 训练时长 | 真实评价 |
+|------|--------|-------------|---------|---------|
+| **A. SAC + 课程** (m1_yellow_s2_v3_buf) | **40%** | **40%** | 800k step / ~3h | ✓ **唯一能 placed 的方案** |
+| B. Expert IK 脚本 (blue_cube_v10) | 20% | n/a | 0 (rule-based) | ✓ 用于收集 demo，非 learned policy |
+| C. BC alone (50/164 demos) | 0% | 0% | 50 epoch / 30s | ✗ unimodal Gaussian mode collapse |
+| C'. BC + SACfD | 0% | 0% | 50k step | ✗ 随机 critic 洗掉 BC |
+| **D. Diffusion Policy** (164 demos) | **0%** | **12%** | 150 epoch / 30 min MPS | △ **真能抓但抓得不稳，无法 transport** |
+
+> ⚠️ Diffusion Policy 期间踩了 2 个隐藏 bug：① MPS `non_blocking=True` → NaN（trainer.py 改同步），② DDIM scheduler 缺 `pred_a_0.clamp(-1,1)` → 推理发散到几百（scheduler.py 已修）。修完才有 12% 真抓，否则全 0%。
+
+### 关于"为什么 Diffusion 比 SAC 还差"
+
+- **SAC 直接在 env 里探索 + dense reward 引导** → 能学到完整 grasp+place 链路（800k step + 课程）
+- **Diffusion/BC 只 imitate expert，不在 env 探索** → 能复制「approach + close」的局部模式，但 transport 相位需要细控制（chunk 内 Δq 平滑变化）；164 demos 不足以让模型学到 obs→精确 chunk 的条件映射，最终 chunk 全饱和 ±1 像 expert 但 phase timing 错乱
+- **结论**：在我们这个 5DOF + hook gripper 任务上，**dense-reward RL > offline imitation**，跟 paper 上 7DOF 抓 + 数千 demo 的设置不一样
 
 ### 未实施的下一步
 
 - **Critic-only warmup**：用 demo offline 训 critic 数千步再放 actor（最有希望）
 - **AWAC / IQL**：BC + RL 的 SOTA，actor loss 加 BC regularization
+- **更多 demo + 更大模型**：500+ demo + 5M+ params 让 Diffusion 真正发挥（需要 GPU）
 - **Multi-object expert**：调 yellow/red/green 的 GRIP_CLOSE_ACTION 收集多物体 demo
 
 ## BC 路线复现

@@ -48,7 +48,7 @@ def main():
     parser.add_argument("--device", default=auto_device(),
                         help="cpu / mps / cuda")
     parser.add_argument("--run-name", default="dp_blue_v1")
-    parser.add_argument("--ckpt-dir", default="checkpoints")
+    parser.add_argument("--ckpt-dir", default="checkpoints/diffusion")
     parser.add_argument("--num-workers", type=int, default=0,
                         help="DataLoader workers (mps 推荐 0)")
     args = parser.parse_args()
