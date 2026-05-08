@@ -11,7 +11,12 @@
     python eval.py --ckpt checkpoints/m2_random/best_model.zip --target random
 """
 
+
 from __future__ import annotations
+
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
 
 import argparse
 from pathlib import Path
@@ -23,7 +28,7 @@ from stable_baselines3 import SAC
 from env import GraspEnv
 
 
-REPO_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parents[1]   # 项目根
 
 
 def save_video(frames, path, fps=30):

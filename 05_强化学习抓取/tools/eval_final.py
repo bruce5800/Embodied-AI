@@ -14,7 +14,12 @@
     python eval_final.py --episodes 50                      # 减少 episode 加速
 """
 
+
 from __future__ import annotations
+
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
 
 import argparse
 from collections import Counter
@@ -27,8 +32,8 @@ from stable_baselines3 import SAC
 from env import GraspEnv
 
 
-REPO_ROOT = Path(__file__).resolve().parent
-DEFAULT_CKPT = REPO_ROOT / "checkpoints" / "m1_yellow_s2_v3_buf" / "best_model.zip"
+REPO_ROOT = Path(__file__).resolve().parents[1]   # 项目根
+DEFAULT_CKPT = REPO_ROOT / "checkpoints" / "sac" / "m1_yellow_s2_v3_buf" / "best_model.zip"
 
 
 def save_video(frames, path, fps=30):

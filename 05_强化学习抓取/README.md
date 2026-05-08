@@ -8,7 +8,7 @@
 
 ### 真实可用成果：SAC 课程化（v10 stage 2）
 
-`checkpoints/m1_yellow_s2_v3_buf/best_model.zip` — 800k step 训练。
+`checkpoints/sac/m1_yellow_s2_v3_buf/best_model.zip` — 800k step 训练。
 
 **严格诊断 50 ep（v10 训练时 env，不含 friction softening）**：
 
@@ -52,22 +52,22 @@
 
 ```
 05_强化学习抓取/
-├── env/                          # gymnasium 环境
-│   ├── grasp_env.py              # GraspEnv（28-dim obs / 6-dim joint-space action）
-│   ├── scene_constants.py        # 场景常量、关节、夹爪、阈值
-│   ├── randomization.py          # 物体随机化（含课程化 target_override）
-│   └── reward_shaping.py         # phase-gated dense reward
-├── configs/
-│   └── sac_default.yaml          # SAC 超参
-├── train_sac.py                  # 训练（支持 --load-from 继续训练 + buffer 持久化）
-├── eval.py                       # 单 ckpt 评估 + 视频
-├── eval_final.py                 # 综合评估（训练分布 + zero-shot）
-├── diagnose.py                   # 详细行为统计（approached/lifted/held/placed/oob）
-├── expert.py                     # IK + scripted 抓取（baseline）
-├── smoke_test.py                 # 50 步随机动作 sanity check
-├── 实验日志.md                    # v1-v11 完整迭代记录
-└── README.md                     # 本文件
+├── env/                  GraspEnv 环境（所有方法共用）
+├── diffusion_policy/     Diffusion Policy 库代码（self-contained）
+├── methods/
+│   ├── sac/              路线 A: SAC + 反向课程
+│   ├── expert/           路线 B: IK 脚本式 expert + demo 收集
+│   ├── dapg/             路线 C: BC + DAPG
+│   └── diffusion/        路线 D: Diffusion Policy 入口
+├── tools/                通用诊断 / 评估工具
+├── checkpoints/          (按方法分: sac/, bc/, dapg/, diffusion/)
+├── demos/                expert 收集的 npz
+├── demos_videos/         成果展示视频
+├── 实验日志.md            v1-v11 SAC + v1-v9 expert + BC + DAPG + Diffusion 全过程
+└── PROJECT_STRUCTURE.md  详细结构与调用示例
 ```
+
+详见 [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)。
 
 ## 快速复现
 
@@ -79,34 +79,34 @@ pip install gymnasium stable-baselines3 tensorboard
 
 ### Smoke test
 ```bash
-python smoke_test.py
+python tools/smoke_test.py
 ```
 
 ### 训练（从零）
 ```bash
 # Stage 1: yellow zone, radius 0.05, 600k step（~10 min）
-python train_sac.py --total-timesteps 600000 --n-envs 8 \
+python methods/sac/train.py --total-timesteps 600000 --n-envs 8 \
     --obj-radius 0.05 --target yellow_cylinder \
     --run-name m1_yellow_v10_600k
 
 # Stage 2: 扩展到 radius 0.10, load stage 1（~3-4 min）
-python train_sac.py --total-timesteps 200000 --n-envs 8 \
+python methods/sac/train.py --total-timesteps 200000 --n-envs 8 \
     --obj-radius 0.10 --target yellow_cylinder \
-    --load-from checkpoints/m1_yellow_v10_600k/best_model.zip \
+    --load-from checkpoints/sac/m1_yellow_v10_600k/best_model.zip \
     --run-name m1_yellow_s2_v3_buf
 ```
 
 ### 评估
 ```bash
 # 综合评估（训练分布 + zero-shot, 各 100 ep + 视频）
-python eval_final.py
+python tools/eval_final.py
 
 # 详细行为诊断
-python diagnose.py --ckpt checkpoints/m1_yellow_s2_v3_buf/best_model.zip \
+python tools/diagnose.py --ckpt checkpoints/sac/m1_yellow_s2_v3_buf/best_model.zip \
     --target yellow_cylinder --obj-radius 0.10 --episodes 50
 
 # 单 ckpt 评估 + 录视频
-python eval.py --ckpt checkpoints/m1_yellow_s2_v3_buf/best_model.zip \
+python tools/eval.py --ckpt checkpoints/sac/m1_yellow_s2_v3_buf/best_model.zip \
     --target yellow_cylinder --episodes 30 --render
 ```
 
@@ -181,19 +181,19 @@ Penalties：step -0.01、action -0.001‖a‖²、OOB -10。
 
 ```bash
 # 1. 收集 50 个 placed demo（4 worker 并行，~3 hours）
-python collect_demos.py --target blue_cube --n-success 50 --n-workers 4
+python methods/expert/collect_demos.py --target blue_cube --n-success 50 --n-workers 4
 
 # 2. BC pretrain (50 epochs, ~30 sec)
-python bc_pretrain.py --demos demos/blue_cube_v9.npz \
-    --target blue_cube --epochs 50 --out checkpoints/bc_blue_cube
+python methods/dapg/bc_pretrain.py --demos demos/blue_cube_v9.npz \
+    --target blue_cube --epochs 50 --out checkpoints/bc/bc_blue_cube_v4
 
 # 3. eval BC alone（lift 80% / placed 0%）
-python eval.py --ckpt checkpoints/bc_blue_cube/policy.zip \
+python tools/eval.py --ckpt checkpoints/bc/bc_blue_cube_v4/policy.zip \
     --target blue_cube --episodes 30 --render
 
 # 4. (可选) SACfD fine-tune —— 当前会洗掉 BC，待 critic warmup 修复
-python train_sac.py --target blue_cube --total-timesteps 50000 --n-envs 8 \
-    --load-from checkpoints/bc_blue_cube/policy.zip \
+python methods/sac/train.py --target blue_cube --total-timesteps 50000 --n-envs 8 \
+    --load-from checkpoints/bc/bc_blue_cube_v4/policy.zip \
     --load-demos demos/blue_cube_v9.npz \
     --lr 3e-5 --run-name m1_sacfd
 ```

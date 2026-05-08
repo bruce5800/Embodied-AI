@@ -5,7 +5,12 @@
         --target blue_cube --episodes 50 --render
 """
 
+
 from __future__ import annotations
+
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
 import argparse
 from pathlib import Path
@@ -17,7 +22,7 @@ from diffusion_policy import DiffusionPolicy
 from env import GraspEnv
 
 
-REPO_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parents[2]   # 项目根
 STABLE_HELD_STEPS = 10
 
 

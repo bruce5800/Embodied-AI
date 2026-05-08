@@ -14,7 +14,12 @@
     python train_sac.py --total-timesteps 5_000 --run-name smoke
 """
 
+
 from __future__ import annotations
+
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
 import argparse
 from pathlib import Path
@@ -31,7 +36,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 from env import GraspEnv
 
 
-REPO_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parents[2]   # 项目根
 
 
 def make_env(target_object, max_episode_steps, seed, curriculum_radius=None):
@@ -77,7 +82,8 @@ def parse_target(target_arg: str):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/sac_default.yaml")
+    parser.add_argument("--config",
+                        default=str(Path(__file__).resolve().parent / ".." / "sac" / "configs" / "sac.yaml" if "dapg" in __file__ else Path(__file__).resolve().parent / "configs" / "sac.yaml"))
     parser.add_argument("--target", default="red_cylinder",
                         help="固定目标物体；'random' 表示每 episode 随机")
     parser.add_argument("--total-timesteps", type=int, default=None,

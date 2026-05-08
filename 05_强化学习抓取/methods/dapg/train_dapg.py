@@ -14,7 +14,12 @@
         --run-name m1_dapg_blue
 """
 
+
 from __future__ import annotations
+
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
 import argparse
 from pathlib import Path
@@ -31,7 +36,7 @@ from env import GraspEnv
 from sac_with_bc import SACWithBC
 
 
-REPO_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parents[2]   # 项目根
 
 
 def make_env_fn(target, max_steps, seed, soften):
@@ -49,7 +54,8 @@ def make_env_fn(target, max_steps, seed, soften):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/sac_default.yaml")
+    parser.add_argument("--config",
+                        default=str(Path(__file__).resolve().parent / ".." / "sac" / "configs" / "sac.yaml" if "dapg" in __file__ else Path(__file__).resolve().parent / "configs" / "sac.yaml"))
     parser.add_argument("--demos", required=True,
                         help="npz 文件（collect_demos.py 输出）")
     parser.add_argument("--target", default="blue_cube")

@@ -14,7 +14,12 @@
 继承关系：直接继承 SB3 SAC，override train() 方法。
 """
 
+
 from __future__ import annotations
+
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
 from typing import Optional
 

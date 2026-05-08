@@ -16,7 +16,12 @@ episode 结束后只保留 placed=True 的 trajectory。
     python collect_demos.py --target blue_cube --n-success 100 --n-workers 6 &
 """
 
+
 from __future__ import annotations
+
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
 import argparse
 import multiprocessing as mp
