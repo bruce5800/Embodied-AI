@@ -23,15 +23,29 @@
 | **placed_via_held**（真"抓-放"完整流程） | **34%** |
 | 假阳性"捞 hack"（placed 但没真抓） | 6% |
 
-演示视频：
-- [真"抓-放"成功](05_强化学习抓取/demos_videos/v10_real_grasp_yellow_1_seed10001.mp4) ×3 个
-- [反例：捞 hack](05_强化学习抓取/demos_videos/v10_push_hack_yellow_1_seed10015.mp4)（placed 但 actor 没真抓握）
+**SAC 真"抓-放"演示**（黄色圆柱，placed_via_held=34%）：
 
-> ⚠️ 项目过程中发现 `info["lifted"]`/`info["held"]`/`info["placed"]` 都含**假阳性触发**——必须用 `stably_held` (≥10 步连续) + `placed_via_held` (先 stably_held 再 placed) 才能反映真实抓取能力。详见 [05_强化学习抓取/实验日志.md](05_强化学习抓取/实验日志.md)。
+<table>
+<tr>
+<td><img src="05_强化学习抓取/demos_videos/gifs/sac_grasp_1.gif" width="380"/></td>
+<td><img src="05_强化学习抓取/demos_videos/gifs/sac_grasp_2.gif" width="380"/></td>
+</tr>
+<tr><td align="center">SAC ep1：approach → 闭爪 → lift → place</td><td align="center">SAC ep2：第二例完整 pick-and-place</td></tr>
+</table>
 
-**BC + Expert demo 路线**：探索失败（actor mode collapse + SAC fine-tune 洗 actor），但产生了 expert 几何调试日志和真伪判定方法学。
+> ⚠️ 项目过程中发现 `info["lifted"]`/`info["held"]`/`info["placed"]` 都含**假阳性触发**——必须用 `stably_held` (≥10 步连续) + `placed_via_held` (先 stably_held 再 placed) 才能反映真实抓取能力。SAC zero-shot 也有[假阳性"捞 hack"反例](05_强化学习抓取/demos_videos/v10_push_hack_yellow_1_seed10015.mp4)（placed=True 但靠机械臂"捞"而非夹爪夹）。详见 [05_强化学习抓取/实验日志.md](05_强化学习抓取/实验日志.md)。
 
-完整记录见 [05_强化学习抓取/README.md](05_强化学习抓取/README.md) 和 [实验日志.md](05_强化学习抓取/实验日志.md)。
+**Expert IK 脚本式抓取**（rule-based，placed 20%，用于收集 BC/Diffusion 的 expert demos）：
+
+<table>
+<tr>
+<td><img src="05_强化学习抓取/demos_videos/gifs/expert_grasp_1.gif" width="380"/></td>
+<td><img src="05_强化学习抓取/demos_videos/gifs/expert_grasp_2.gif" width="380"/></td>
+</tr>
+<tr><td align="center">Expert ep5：DLS-IK 五阶段抓取</td><td align="center">Expert ep9：transport 到 zone 完整流程</td></tr>
+</table>
+
+**BC / DAPG / Diffusion Policy 路线**：均探索过，**Diffusion Policy（500 epoch MPS）** 是 offline 路线最佳，placed 1.3%（首次出现真"抓-放"），但仍远低于 SAC 40%。完整 4 路线对比见 [05_强化学习抓取/README.md](05_强化学习抓取/README.md) 和 [实验日志.md](05_强化学习抓取/实验日志.md)。
 
 ---
 

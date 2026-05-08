@@ -22,14 +22,29 @@
 
 > ⚠️ 之前 `eval_final.py` 报的 47% 是**老 env（不含 friction softening）下的数字**——但中间为了 expert/BC 调试加了 friction，env 不一致让 ckpt 表现下降。现在 env 加了 `soften_contacts=False` 默认参数恢复 v10 训练 env，**真实成果是 placed_via_held 34%**。
 
-### 演示视频（demos_videos/）
+### 演示（gifs）
 
-| 视频 | 内容 |
-|------|------|
-| [v10_real_grasp_yellow_1_seed10001.mp4](demos_videos/v10_real_grasp_yellow_1_seed10001.mp4) | **真"抓-放"成功**：连续 ≥10 步抓握 + 放到 zone |
-| [v10_real_grasp_yellow_2_seed10002.mp4](demos_videos/v10_real_grasp_yellow_2_seed10002.mp4) | 同上，第二例 |
-| [v10_real_grasp_yellow_3_seed10006.mp4](demos_videos/v10_real_grasp_yellow_3_seed10006.mp4) | 同上，第三例 |
-| [v10_push_hack_yellow_1_seed10015.mp4](demos_videos/v10_push_hack_yellow_1_seed10015.mp4) | **反例对比**：placed=True 但**没真抓握** —— 用机械臂"捞"物体到 zone |
+**SAC 真"抓-放"**：
+
+<table>
+<tr>
+<td><img src="demos_videos/gifs/sac_grasp_1.gif" width="380"/></td>
+<td><img src="demos_videos/gifs/sac_grasp_2.gif" width="380"/></td>
+</tr>
+<tr><td align="center">SAC ep1（连续 ≥10 步抓握 + placed）</td><td align="center">SAC ep2（第二例完整 pick-and-place）</td></tr>
+</table>
+
+**Expert IK 脚本式抓取（rule-based, placed 20%）**：
+
+<table>
+<tr>
+<td><img src="demos_videos/gifs/expert_grasp_1.gif" width="380"/></td>
+<td><img src="demos_videos/gifs/expert_grasp_2.gif" width="380"/></td>
+</tr>
+<tr><td align="center">Expert ep5：DLS-IK 五阶段抓取</td><td align="center">Expert ep9：transport 到 zone</td></tr>
+</table>
+
+完整 mp4 在 `demos_videos/`：[real_grasp_1](demos_videos/v10_real_grasp_yellow_1_seed10001.mp4) ~3，[push_hack 反例](demos_videos/v10_push_hack_yellow_1_seed10015.mp4)（placed=True 但靠机械臂"捞"，非夹爪夹）。
 
 ### 探索失败的路线（但有经验积累）
 
@@ -38,16 +53,10 @@
 | BC alone (50 demos) | placed 0%, **真抓 0%** | unimodal Gaussian + 50 demos 学不到 piecewise sequential 行为；MSE/likelihood 都 mode collapse 到"gripper 永远开" |
 | BC v4 (close ×3 weight) | placed 0%, tried_close 30% | actor 学到闭爪但 timing 错位 |
 | BC + SACfD (naive / gentle) | actor 被洗 | 随机 critic 让 SAC update 把 BC 行为冲掉 |
-| **Diffusion Policy** (164 demos, 150 epoch MPS) | placed 0%, **stably_held 12%, lifted 28%, contacted 94%** | DDIM `pred_a_0` 缺 clip → 推理发散到几百（已修）；修后能真抓 12%，但 chunk 全饱和 ±1 没法平滑 transport；本质仍是 BC + 164 demos 不够覆盖 transport 相位 |
+| **Diffusion Policy v2 (150 epoch MPS)** | placed 0%, **stably_held 12%** | DDIM `pred_a_0` 缺 clip → 推理发散到几百（已修）；修后能真抓 12% 但 0 placed |
+| **Diffusion Policy v3 (500 epoch MPS)** | **placed 1.3%** (2/150), stably_held 5% | 拉长 cosine 让 loss 0.108→0.087，**首次出现真"抓-放"** 但只 1%；模型从「广撒网」过拟合到「单一窄路径」 |
 
 > ⚠️ **关于 `info["lifted"]` 假信号**：之前 BC 评估的 lift_rate 80% **不是真抓取** —— `lifted` 仅判 `obj_z>6cm` 不区分"被夹住举起"vs"张开 gripper 推过 6cm 瞬间"。**真实抓取必须看 `held`（contact AND closing AND lifted 同时为真）**。BC 路线 `held=0%`。
-
-### 演示视频（demos_videos/）
-
-| 视频 | 内容 |
-|------|------|
-| [v10_sac_curriculum_yellow_placed.mp4](demos_videos/v10_sac_curriculum_yellow_placed.mp4) | **SAC 课程化下完整 pick-and-place**（项目唯一真实成功演示） |
-| [v10_sac_zero_shot_full_placed.mp4](demos_videos/v10_sac_zero_shot_full_placed.mp4) | SAC zero-shot 全场景偶发成功（9% rate） |
 
 ## 目录结构
 
@@ -170,7 +179,8 @@ Penalties：step -0.01、action -0.001‖a‖²、OOB -10。
 | B. Expert IK 脚本 (blue_cube_v10) | 20% | n/a | 0 (rule-based) | ✓ 用于收集 demo，非 learned policy |
 | C. BC alone (50/164 demos) | 0% | 0% | 50 epoch / 30s | ✗ unimodal Gaussian mode collapse |
 | C'. BC + SACfD | 0% | 0% | 50k step | ✗ 随机 critic 洗掉 BC |
-| **D. Diffusion Policy** (164 demos) | **0%** | **12%** | 150 epoch / 30 min MPS | △ **真能抓但抓得不稳，无法 transport** |
+| D. Diffusion Policy (150 epoch) | 0% | 12% | 150 epoch / 5 min MPS | △ 真能抓但 0 placed |
+| **D'. Diffusion Policy (500 epoch)** | **1.3%** (150 ep eval) | **5%** | 500 epoch / 15 min MPS | △ 加训后 **首次真 placed**，但仍远低于 SAC |
 
 > ⚠️ Diffusion Policy 期间踩了 2 个隐藏 bug：① MPS `non_blocking=True` → NaN（trainer.py 改同步），② DDIM scheduler 缺 `pred_a_0.clamp(-1,1)` → 推理发散到几百（scheduler.py 已修）。修完才有 12% 真抓，否则全 0%。
 
@@ -178,6 +188,7 @@ Penalties：step -0.01、action -0.001‖a‖²、OOB -10。
 
 - **SAC 直接在 env 里探索 + dense reward 引导** → 能学到完整 grasp+place 链路（800k step + 课程）
 - **Diffusion/BC 只 imitate expert，不在 env 探索** → 能复制「approach + close」的局部模式，但 transport 相位需要细控制（chunk 内 Δq 平滑变化）；164 demos 不足以让模型学到 obs→精确 chunk 的条件映射，最终 chunk 全饱和 ±1 像 expert 但 phase timing 错乱
+- **训练量不是瓶颈**：500 epoch（loss 0.087）vs 150 epoch（loss 0.108）虽 -19%，placed 也只从 0% → 1%；epoch 400 后 loss 已 plateau，是数据 + 模型容量上限
 - **结论**：在我们这个 5DOF + hook gripper 任务上，**dense-reward RL > offline imitation**，跟 paper 上 7DOF 抓 + 数千 demo 的设置不一样
 
 ### 未实施的下一步
