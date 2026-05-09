@@ -1,40 +1,41 @@
 # Bambot Player
 
-A browser-based application for running simulations and controlling Bambot and SO100 arm. This interactive platform allows users to visualize and manipulate robotic models in real-time.
+基于浏览器的机械臂仿真与控制应用，用于运行 Bambot 与 SO100 机械臂的仿真和真机控制。该交互式平台允许用户实时可视化和操作机器人模型。
 
-## Features
+## 功能特性
 
-- Virtual robot arm visualization and control
-- Real robot control via Web Serial API
-- Keyboard control for both virtual and real robots simultaneously
-- Support for multiple robot models
+- 虚拟机械臂可视化与控制
+- 通过 Web Serial API 控制真实机械臂
+- 键盘同步控制虚拟机械臂与真实机械臂
+- 支持多种机器人模型
 
-## Real Robot Control
+## 真实机械臂控制
 
-The application now supports controlling real robot arms with Feetech SCS servo motors (ID 1-6) using the Web Serial API. When connected to a real robot:
+应用现已支持通过 Web Serial API 控制使用 Feetech SCS 舵机（ID 1-6）的真实机械臂。连接真机后：
 
-1. Keyboard controls will simultaneously move both the virtual and real robot
-2. Robot movement speed can be adjusted using the speed slider
-3. The real robot connection can be toggled using the "Connect Real Robot" button in the control panel
+1. 键盘控制会同时移动虚拟机械臂和真实机械臂
+2. 可通过速度滑块调节机械臂运动速度
+3. 在控制面板点击 "Connect Real Robot" 按钮可切换真机连接
 
-### How it Works
+### 工作原理
 
-The system uses a relative movement approach:
-1. When connecting, it reads the current positions of all servos 
-2. Keyboard commands apply relative position changes rather than absolute positions
-3. This ensures the real robot responds properly regardless of its initial position
+系统使用相对运动方式：
 
-### Connection Requirements
+1. 连接时读取所有舵机的当前位置
+2. 键盘指令应用相对位置变化，而非绝对位置
+3. 这样无论机械臂初始位置如何，真机都能正确响应
 
-- Chrome or Edge browser that supports Web Serial API
-- USB-to-Serial adapter connected to the robot's servo bus
-- Servo IDs configured from 1 to 6 (matching the joint numbers)
-- Fixed baudrate: 1,000,000 bps
-- Fixed protocol: SCS (1)
+### 连接要求
 
-### Usage
+- 支持 Web Serial API 的 Chrome 或 Edge 浏览器
+- 连接到舵机总线的 USB 转串口适配器
+- 舵机 ID 配置为 1 到 6（与关节编号对应）
+- 固定波特率：1,000,000 bps
+- 固定协议：SCS (1)
 
-1. Open the application in a supported browser
-2. Click "Connect Real Robot" in the control panel
-3. Select the appropriate serial port when prompted
-4. Use keyboard controls (Q/A, W/S, etc.) to move both virtual and real robots
+### 使用方法
+
+1. 在支持的浏览器中打开应用
+2. 在控制面板中点击 "Connect Real Robot"
+3. 按提示选择对应的串口
+4. 使用键盘（Q/A、W/S 等）同时控制虚拟与真实机械臂
